@@ -6,130 +6,125 @@ const path = require("path");
 const app = express();
 
 const PORT = process.env.PORT || 8888;
-
-// =====================================================
-// MIDDLEWARE
-// =====================================================
+const DB_PATH = path.join(__dirname, "gps.db");
 
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// =====================================================
-// DATABASE
-// =====================================================
+const db = new sqlite3.Database(DB_PATH);
 
-const dbPath = path.join(__dirname, "gps.db");
+function initializeDatabase() {
+  return new Promise((resolve, reject) => {
+    db.serialize(() => {
+      // ---------------------------------------------
+      // Check movement table
+      // ---------------------------------------------
 
-const db = new sqlite3.Database(dbPath, (err) => {
-  if (err) {
-    console.error("❌ Database connection error:", err.message);
-    process.exit(1);
-  }
+      db.all(`PRAGMA table_info(movement)`, (err, columns) => {
+        if (err) {
+          return reject(err);
+        }
 
-  console.log("✅ Connected to GPS database.");
-});
+        // Table does not exist
+        if (columns.length === 0) {
+          console.log("Creating movement table...");
 
-// =====================================================
-// CREATE TABLES + DATABASE MIGRATION
-// =====================================================
-
-db.serialize(() => {
-  // ---------------------------------------------------
-  // Movement table
-  // ---------------------------------------------------
-
-  db.run(
-    `
-    CREATE TABLE IF NOT EXISTS movement (
-      id TEXT PRIMARY KEY,
-      lat REAL NOT NULL,
-      lng REAL NOT NULL,
-      updatedAt INTEGER NOT NULL
-    )
-    `,
-    (err) => {
-      if (err) {
-        console.error(
-          "❌ Movement table error:",
-          err.message
-        );
-      } else {
-        console.log("✅ Movement table ready.");
-      }
-    }
-  );
-
-  // ---------------------------------------------------
-  // Migration:
-  // Add updatedAt if old database doesn't have it
-  // ---------------------------------------------------
-
-  db.all(`PRAGMA table_info(movement)`, (err, columns) => {
-    if (err) {
-      console.error(
-        "❌ Could not inspect movement table:",
-        err.message
-      );
-      return;
-    }
-
-    const hasUpdatedAt = columns.some(
-      (column) => column.name === "updatedAt"
-    );
-
-    if (!hasUpdatedAt) {
-      console.log(
-        "⚠️ updatedAt column missing. Adding it..."
-      );
-
-      db.run(
-        `ALTER TABLE movement ADD COLUMN updatedAt INTEGER`,
-        (alterErr) => {
-          if (alterErr) {
-            console.error(
-              "❌ Migration error:",
-              alterErr.message
-            );
-            return;
-          }
-
-          console.log(
-            "✅ updatedAt column added successfully."
-          );
-
-          // Give existing rows a timestamp
           db.run(
             `
-            UPDATE movement
-            SET updatedAt = ?
-            WHERE updatedAt IS NULL
+            CREATE TABLE movement (
+              id TEXT PRIMARY KEY,
+              lat REAL NOT NULL,
+              lng REAL NOT NULL,
+              updatedAt INTEGER NOT NULL
+            )
             `,
-            [Date.now()],
-            (updateErr) => {
-              if (updateErr) {
-                console.error(
-                  "❌ Existing row update error:",
-                  updateErr.message
-                );
-              } else {
-                console.log(
-                  "✅ Existing movement records updated."
-                );
+            (createErr) => {
+              if (createErr) {
+                return reject(createErr);
               }
+
+              console.log("Movement table created.");
+              continueDatabaseSetup(resolve, reject);
             }
           );
+
+          return;
         }
-      );
-    } else {
-      console.log("✅ updatedAt column already exists.");
-    }
+
+        // Table already exists
+        const hasUpdatedAt = columns.some(
+          (column) => column.name === "updatedAt"
+        );
+
+        if (hasUpdatedAt) {
+          console.log("updatedAt column already exists.");
+          continueDatabaseSetup(resolve, reject);
+          return;
+        }
+
+        // ---------------------------------------------
+        // OLD DATABASE
+        // Rebuild movement table with updatedAt
+        // ---------------------------------------------
+
+        console.log(
+          "Old movement table detected."
+        );
+
+        console.log(
+          "Adding updatedAt column..."
+        );
+
+        db.run(
+          `
+          ALTER TABLE movement
+          ADD COLUMN updatedAt INTEGER
+          `,
+          (alterErr) => {
+            if (alterErr) {
+              return reject(alterErr);
+            }
+
+            console.log(
+              "updatedAt column added."
+            );
+
+            // Update old records
+            db.run(
+              `
+              UPDATE movement
+              SET updatedAt = ?
+              WHERE updatedAt IS NULL
+              `,
+              [Date.now()],
+              (updateErr) => {
+                if (updateErr) {
+                  return reject(updateErr);
+                }
+
+                console.log(
+                  "Existing records migrated."
+                );
+
+                continueDatabaseSetup(
+                  resolve,
+                  reject
+                );
+              }
+            );
+          }
+        );
+      });
+    });
   });
+}
 
-  // ---------------------------------------------------
-  // Location history table
-  // ---------------------------------------------------
+// ---------------------------------------------
+// Continue database setup
+// ---------------------------------------------
 
+function continueDatabaseSetup(resolve, reject) {
   db.run(
     `
     CREATE TABLE IF NOT EXISTS location_history (
@@ -142,22 +137,21 @@ db.serialize(() => {
     `,
     (err) => {
       if (err) {
-        console.error(
-          "❌ Location history table error:",
-          err.message
-        );
-      } else {
-        console.log(
-          "✅ Location history table ready."
-        );
+        return reject(err);
       }
+
+      console.log(
+        "Location history table ready."
+      );
+
+      resolve();
     }
   );
-});
+}
 
-// =====================================================
-// ROOT ROUTE
-// =====================================================
+// =================================================
+// ROOT
+// =================================================
 
 app.get("/", (req, res) => {
   res.json({
@@ -166,9 +160,9 @@ app.get("/", (req, res) => {
   });
 });
 
-// =====================================================
-// HEALTH CHECK
-// =====================================================
+// =================================================
+// HEALTH
+// =================================================
 
 app.get("/health", (req, res) => {
   res.status(200).json({
@@ -178,14 +172,13 @@ app.get("/health", (req, res) => {
   });
 });
 
-// =====================================================
+// =================================================
 // SET GPS LOCATION
-// =====================================================
+// =================================================
 
 app.post("/set", (req, res) => {
   const { id, lat, lng } = req.body;
 
-  // Validate required fields
   if (
     !id ||
     lat === undefined ||
@@ -200,7 +193,6 @@ app.post("/set", (req, res) => {
   const longitude = Number(lng);
   const timestamp = Date.now();
 
-  // Validate coordinates
   if (
     !Number.isFinite(latitude) ||
     !Number.isFinite(longitude)
@@ -210,27 +202,22 @@ app.post("/set", (req, res) => {
     });
   }
 
-  // Validate latitude range
   if (latitude < -90 || latitude > 90) {
     return res.status(400).json({
-      error: "Latitude must be between -90 and 90",
+      error: "Invalid latitude",
     });
   }
 
-  // Validate longitude range
   if (longitude < -180 || longitude > 180) {
     return res.status(400).json({
-      error: "Longitude must be between -180 and 180",
+      error: "Invalid longitude",
     });
   }
-
-  // ---------------------------------------------------
-  // Update latest truck position
-  // ---------------------------------------------------
 
   db.run(
     `
-    INSERT INTO movement (
+    INSERT INTO movement
+    (
       id,
       lat,
       lng,
@@ -253,7 +240,7 @@ app.post("/set", (req, res) => {
     (err) => {
       if (err) {
         console.error(
-          "❌ Movement save error:",
+          "Movement error:",
           err.message
         );
 
@@ -262,13 +249,10 @@ app.post("/set", (req, res) => {
         });
       }
 
-      // -------------------------------------------------
-      // Save location to history
-      // -------------------------------------------------
-
       db.run(
         `
-        INSERT INTO location_history (
+        INSERT INTO location_history
+        (
           truckId,
           lat,
           lng,
@@ -285,7 +269,7 @@ app.post("/set", (req, res) => {
         (historyErr) => {
           if (historyErr) {
             console.error(
-              "❌ History save error:",
+              "History error:",
               historyErr.message
             );
 
@@ -295,10 +279,10 @@ app.post("/set", (req, res) => {
           }
 
           console.log(
-            `📍 ${id}: ${latitude}, ${longitude}`
+            `GPS: ${id} -> ${latitude}, ${longitude}`
           );
 
-          return res.json({
+          res.json({
             message: "Location saved",
             data: {
               id,
@@ -313,9 +297,9 @@ app.post("/set", (req, res) => {
   );
 });
 
-// =====================================================
-// GET LATEST TRUCK LOCATIONS
-// =====================================================
+// =================================================
+// GET LATEST LOCATIONS
+// =================================================
 
 app.get("/get", (req, res) => {
   db.all(
@@ -332,7 +316,7 @@ app.get("/get", (req, res) => {
     (err, rows) => {
       if (err) {
         console.error(
-          "❌ Get movement error:",
+          "Get movement error:",
           err.message
         );
 
@@ -341,7 +325,7 @@ app.get("/get", (req, res) => {
         });
       }
 
-      return res.json({
+      res.json({
         message: "ok",
         data: rows,
       });
@@ -349,9 +333,9 @@ app.get("/get", (req, res) => {
   );
 });
 
-// =====================================================
-// GET TRUCK LOCATION HISTORY
-// =====================================================
+// =================================================
+// GET HISTORY
+// =================================================
 
 app.get("/history/:truckId", (req, res) => {
   const { truckId } = req.params;
@@ -370,7 +354,7 @@ app.get("/history/:truckId", (req, res) => {
     (err, rows) => {
       if (err) {
         console.error(
-          "❌ History fetch error:",
+          "History error:",
           err.message
         );
 
@@ -379,7 +363,7 @@ app.get("/history/:truckId", (req, res) => {
         });
       }
 
-      return res.json({
+      res.json({
         message: "ok",
         data: rows,
       });
@@ -387,9 +371,9 @@ app.get("/history/:truckId", (req, res) => {
   );
 });
 
-// =====================================================
-// CLEAR TRUCK HISTORY
-// =====================================================
+// =================================================
+// DELETE HISTORY
+// =================================================
 
 app.delete("/history/:truckId", (req, res) => {
   const { truckId } = req.params;
@@ -402,17 +386,12 @@ app.delete("/history/:truckId", (req, res) => {
     [truckId],
     function (err) {
       if (err) {
-        console.error(
-          "❌ Delete history error:",
-          err.message
-        );
-
         return res.status(500).json({
           error: err.message,
         });
       }
 
-      return res.json({
+      res.json({
         message: "History cleared",
         truckId,
         deletedRecords: this.changes,
@@ -421,9 +400,9 @@ app.delete("/history/:truckId", (req, res) => {
   );
 });
 
-// =====================================================
-// 404 HANDLER
-// =====================================================
+// =================================================
+// 404
+// =================================================
 
 app.use((req, res) => {
   res.status(404).json({
@@ -432,12 +411,23 @@ app.use((req, res) => {
   });
 });
 
-// =====================================================
-// START SERVER
-// =====================================================
+// =================================================
+// START SERVER ONLY AFTER DATABASE IS READY
+// =================================================
 
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(
-    `🚛 GPS server running on port ${PORT}`
-  );
-});
+initializeDatabase()
+  .then(() => {
+    app.listen(PORT, "0.0.0.0", () => {
+      console.log(
+        `GPS server running on port ${PORT}`
+      );
+    });
+  })
+  .catch((err) => {
+    console.error(
+      "❌ Database initialization failed:",
+      err
+    );
+
+    process.exit(1);
+  });

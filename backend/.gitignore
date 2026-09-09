@@ -1,0 +1,5 @@
+node_modules/
+gps.db
+*.db
+.env
+

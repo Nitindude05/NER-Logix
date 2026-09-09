@@ -94,6 +94,9 @@ const DESTINATION =
     SEVEN_SISTERS_ROUTE.length - 1
   ];
 
+
+const API_URL = "https://ner-logix-vgvp.onrender.com";
+
 // ============================================================
 // API HELPER
 // ============================================================

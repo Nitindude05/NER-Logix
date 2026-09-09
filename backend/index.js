@@ -6,13 +6,17 @@ const path = require("path");
 const app = express();
 const PORT = 8888;
 
+/* =========================================================
+   MIDDLEWARE
+   ========================================================= */
+
 app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// --------------------------------------------------
-// DATABASE
-// --------------------------------------------------
+/* =========================================================
+   DATABASE
+   ========================================================= */
 
 const db = new sqlite3.Database(
   path.join(__dirname, "gps.db"),
@@ -26,7 +30,10 @@ const db = new sqlite3.Database(
   }
 );
 
-// Current locations
+/* =========================================================
+   CREATE TABLES
+   ========================================================= */
+
 db.run(`
   CREATE TABLE IF NOT EXISTS movement (
     id TEXT PRIMARY KEY,
@@ -36,7 +43,6 @@ db.run(`
   )
 `);
 
-// GPS history
 db.run(`
   CREATE TABLE IF NOT EXISTS location_history (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -47,9 +53,9 @@ db.run(`
   )
 `);
 
-// --------------------------------------------------
-// HEALTH
-// --------------------------------------------------
+/* =========================================================
+   ROOT ENDPOINT
+   ========================================================= */
 
 app.get("/", (req, res) => {
   res.json({
@@ -58,14 +64,34 @@ app.get("/", (req, res) => {
   });
 });
 
-// --------------------------------------------------
-// RECEIVE GPS LOCATION
-// --------------------------------------------------
+/* =========================================================
+   HEALTH CHECK
+   ========================================================= */
+
+app.get("/health", (req, res) => {
+  res.status(200).json({
+    status: "ok",
+    service: "GPS Tracking API",
+    timestamp: Date.now(),
+  });
+});
+
+/* =========================================================
+   SET / SAVE CURRENT GPS LOCATION
+   ========================================================= */
 
 app.post("/set", (req, res) => {
   const { id, lat, lng } = req.body;
 
-  if (!id || lat === undefined || lng === undefined) {
+  /* -------------------------------------------------------
+     Validate required fields
+     ------------------------------------------------------- */
+
+  if (
+    !id ||
+    lat === undefined ||
+    lng === undefined
+  ) {
     return res.status(400).json({
       error: "id, lat and lng are required",
     });
@@ -74,6 +100,10 @@ app.post("/set", (req, res) => {
   const latitude = Number(lat);
   const longitude = Number(lng);
   const timestamp = Date.now();
+
+  /* -------------------------------------------------------
+     Validate coordinates
+     ------------------------------------------------------- */
 
   if (
     !Number.isFinite(latitude) ||
@@ -84,34 +114,64 @@ app.post("/set", (req, res) => {
     });
   }
 
-  // Save latest position
+  /* -------------------------------------------------------
+     Save / update current movement
+     ------------------------------------------------------- */
+
   db.run(
     `
-    INSERT INTO movement (id, lat, lng, updatedAt)
+    INSERT INTO movement (
+      id,
+      lat,
+      lng,
+      updatedAt
+    )
     VALUES (?, ?, ?, ?)
+
     ON CONFLICT(id)
     DO UPDATE SET
       lat = excluded.lat,
       lng = excluded.lng,
       updatedAt = excluded.updatedAt
     `,
-    [id, latitude, longitude, timestamp],
+    [
+      id,
+      latitude,
+      longitude,
+      timestamp,
+    ],
     (err) => {
       if (err) {
-        console.error("Movement error:", err.message);
+        console.error(
+          "Movement error:",
+          err.message
+        );
+
         return res.status(500).json({
           error: err.message,
         });
       }
 
-      // Save GPS history
+      /* ---------------------------------------------------
+         Save location history
+         --------------------------------------------------- */
+
       db.run(
         `
-        INSERT INTO location_history
-        (truckId, lat, lng, timestamp)
+        INSERT INTO location_history (
+          truckId,
+          lat,
+          lng,
+          timestamp
+        )
         VALUES (?, ?, ?, ?)
         `,
-        [id, latitude, longitude, timestamp],
+        [
+          id,
+          latitude,
+          longitude,
+          timestamp,
+        ],
         (historyErr) => {
           if (historyErr) {
             console.error(
@@ -123,6 +183,10 @@ app.post("/set", (req, res) => {
               error: historyErr.message,
             });
           }
+
+          /* -----------------------------------------------
+             Success response
+             ----------------------------------------------- */
 
           res.json({
             message: "Location saved",
@@ -139,9 +203,9 @@ app.post("/set", (req, res) => {
   );
 });
 
-// --------------------------------------------------
-// GET ALL CURRENT VEHICLES
-// --------------------------------------------------
+/* =========================================================
+   GET CURRENT TRUCK LOCATION
+   ========================================================= */
 
 app.get("/get", (req, res) => {
   db.all(
@@ -153,6 +217,11 @@ app.get("/get", (req, res) => {
     [],
     (err, rows) => {
       if (err) {
+        console.error(
+          "Get movement error:",
+          err.message
+        );
+
         return res.status(500).json({
           error: err.message,
         });
@@ -166,72 +235,92 @@ app.get("/get", (req, res) => {
   );
 });
 
-// --------------------------------------------------
-// GET ONE TRUCK'S HISTORY
-// --------------------------------------------------
+/* =========================================================
+   GET LOCATION HISTORY
+   ========================================================= */
 
-app.get("/history/:truckId", (req, res) => {
-  const { truckId } = req.params;
+app.get(
+  "/history/:truckId",
+  (req, res) => {
+    const { truckId } = req.params;
 
-  db.all(
-    `
-    SELECT
-      lat,
-      lng,
-      timestamp
-    FROM location_history
-    WHERE truckId = ?
-    ORDER BY timestamp ASC
-    `,
-    [truckId],
-    (err, rows) => {
-      if (err) {
-        return res.status(500).json({
-          error: err.message,
+    db.all(
+      `
+      SELECT
+        lat,
+        lng,
+        timestamp
+      FROM location_history
+      WHERE truckId = ?
+      ORDER BY timestamp ASC
+      `,
+      [truckId],
+      (err, rows) => {
+        if (err) {
+          console.error(
+            "History fetch error:",
+            err.message
+          );
+
+          return res.status(500).json({
+            error: err.message,
+          });
+        }
+
+        res.json({
+          message: "ok",
+          data: rows,
         });
       }
+    );
+  }
+);
 
-      res.json({
-        message: "ok",
-        data: rows,
-      });
-    }
-  );
-});
+/* =========================================================
+   DELETE LOCATION HISTORY
+   ========================================================= */
 
-// --------------------------------------------------
-// CLEAR HISTORY
-// --------------------------------------------------
+app.delete(
+  "/history/:truckId",
+  (req, res) => {
+    const { truckId } = req.params;
 
-app.delete("/history/:truckId", (req, res) => {
-  const { truckId } = req.params;
+    db.run(
+      `
+      DELETE FROM location_history
+      WHERE truckId = ?
+      `,
+      [truckId],
+      (err) => {
+        if (err) {
+          console.error(
+            "Delete history error:",
+            err.message
+          );
 
-  db.run(
-    `
-    DELETE FROM location_history
-    WHERE truckId = ?
-    `,
-    [truckId],
-    (err) => {
-      if (err) {
-        return res.status(500).json({
-          error: err.message,
+          return res.status(500).json({
+            error: err.message,
+          });
+        }
+
+        res.json({
+          message: "History cleared",
         });
       }
+    );
+  }
+);
 
-      res.json({
-        message: "History cleared",
-      });
-    }
-  );
-});
+/* =========================================================
+   START SERVER
+   ========================================================= */
 
-// --------------------------------------------------
-// START SERVER
-// --------------------------------------------------
-
-app.listen(PORT, "0.0.0.0", () => {
-  console.log(
-    `GPS server running on http://localhost:${PORT}`
-  );
-});
+app.listen(
+  PORT,
+  "0.0.0.0",
+  () => {
+    console.log(
+      `GPS server running on http://localhost:${PORT}`
+    );
+  }
+);

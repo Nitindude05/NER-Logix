@@ -1,190 +1,356 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+} from "react";
+
+import {
+  Activity,
+  Clock3,
+  MapPin,
+  Navigation,
+  Radio,
+  RefreshCw,
+  Satellite,
+  Truck,
+  Wifi,
+  WifiOff,
+  Route,
+  CircleDot,
+} from "lucide-react";
+
 import {
   MapContainer,
   TileLayer,
   Marker,
   Popup,
-  Polyline,
   CircleMarker,
   useMap,
 } from "react-leaflet";
 
-import {
-  Truck,
-  MapPin,
-  Navigation,
-  Activity,
-  Route,
-  Clock,
-  Wifi,
-  WifiOff,
-  RefreshCw,
-} from "lucide-react";
-
 import L from "leaflet";
 
-// =====================================================
+// ============================================================
 // CONFIG
-// =====================================================
+// ============================================================
 
 const API_URL = "https://ner-logix-vgvp.onrender.com";
-const TRUCK_ID = "TRUCK-001";
 
-const POLLING_INTERVAL = 3000;
+const REFRESH_INTERVAL = 3000;
 
-// =====================================================
-// TRUCK ICON
-// =====================================================
+// Consider a truck offline if no update for this long.
+const OFFLINE_AFTER = 15000;
 
-const truckIcon = L.divIcon({
-  className: "",
-  html: `
-    <div style="
-      width: 42px;
-      height: 42px;
-      border-radius: 50%;
-      background: #2563eb;
-      border: 4px solid white;
-      box-shadow: 0 3px 12px rgba(0,0,0,0.3);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: white;
-      font-size: 20px;
-    ">
-      🚛
-    </div>
-  `,
-  iconSize: [42, 42],
-  iconAnchor: [21, 21],
-  popupAnchor: [0, -21],
-});
+// Different colors for different trucks.
+const TRUCK_COLORS = [
+  "#2563EB",
+  "#DC2626",
+  "#16A34A",
+  "#9333EA",
+  "#EA580C",
+  "#0891B2",
+  "#CA8A04",
+  "#DB2777",
+];
 
-// =====================================================
-// START POINT ICON
-// =====================================================
+// ============================================================
+// HELPERS
+// ============================================================
 
-const startIcon = L.divIcon({
-  className: "",
-  html: `
-    <div style="
-      width: 34px;
-      height: 34px;
-      border-radius: 50%;
-      background: #16a34a;
-      border: 4px solid white;
-      box-shadow: 0 3px 10px rgba(0,0,0,0.25);
-      display: flex;
-      align-items: center;
-      justify-content: center;
-      color: white;
-      font-size: 16px;
-    ">
-      S
-    </div>
-  `,
-  iconSize: [34, 34],
-  iconAnchor: [17, 17],
-});
-
-// =====================================================
-// MAP AUTO CENTER
-// =====================================================
-
-function MapUpdater({ location }) {
-  const map = useMap();
-
-  useEffect(() => {
-    if (!location) return;
-
-    map.setView(
-      [location.lat, location.lng],
-      Math.max(map.getZoom(), 14),
-      {
-        animate: true,
-      }
-    );
-  }, [location, map]);
-
-  return null;
+function getTruckColor(index) {
+  return TRUCK_COLORS[index % TRUCK_COLORS.length];
 }
 
-// =====================================================
-// FORMAT TIME
-// =====================================================
+function isTruckLive(updatedAt) {
+  if (!updatedAt) return false;
+
+  return Date.now() - Number(updatedAt) < OFFLINE_AFTER;
+}
 
 function formatTime(timestamp) {
   if (!timestamp) return "--";
 
-  return new Date(timestamp).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-  });
+  return new Date(Number(timestamp)).toLocaleTimeString(
+    [],
+    {
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+    }
+  );
 }
 
-// =====================================================
-// DISTANCE BETWEEN TWO GPS POINTS
-// =====================================================
+function formatTimeAgo(timestamp) {
+  if (!timestamp) return "--";
 
-function calculateDistance(point1, point2) {
-  if (!point1 || !point2) return 0;
+  const seconds = Math.floor(
+    (Date.now() - Number(timestamp)) / 1000
+  );
+
+  if (seconds < 5) return "Just now";
+
+  if (seconds < 60) {
+    return `${seconds}s ago`;
+  }
+
+  const minutes = Math.floor(seconds / 60);
+
+  if (minutes < 60) {
+    return `${minutes}m ago`;
+  }
+
+  return `${Math.floor(minutes / 60)}h ago`;
+}
+
+function calculateDistance(points) {
+  if (!points || points.length < 2) return 0;
 
   const R = 6371;
 
-  const lat1 = (point1.lat * Math.PI) / 180;
-  const lat2 = (point2.lat * Math.PI) / 180;
+  let total = 0;
 
-  const deltaLat =
-    ((point2.lat - point1.lat) * Math.PI) / 180;
+  for (let i = 1; i < points.length; i++) {
+    const lat1 = (points[i - 1].lat * Math.PI) / 180;
+    const lat2 = (points[i].lat * Math.PI) / 180;
 
-  const deltaLng =
-    ((point2.lng - point1.lng) * Math.PI) / 180;
+    const dLat =
+      ((points[i].lat - points[i - 1].lat) *
+        Math.PI) /
+      180;
 
-  const a =
-    Math.sin(deltaLat / 2) *
-      Math.sin(deltaLat / 2) +
-    Math.cos(lat1) *
-      Math.cos(lat2) *
-      Math.sin(deltaLng / 2) *
-      Math.sin(deltaLng / 2);
+    const dLng =
+      ((points[i].lng - points[i - 1].lng) *
+        Math.PI) /
+      180;
 
-  const c =
-    2 *
-    Math.atan2(
-      Math.sqrt(a),
-      Math.sqrt(1 - a)
-    );
+    const a =
+      Math.sin(dLat / 2) ** 2 +
+      Math.cos(lat1) *
+        Math.cos(lat2) *
+        Math.sin(dLng / 2) ** 2;
 
-  return R * c;
+    const c =
+      2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+
+    total += R * c;
+  }
+
+  return total;
 }
 
-// =====================================================
+// ============================================================
+// TRUCK ICON
+// ============================================================
+
+function createTruckIcon(color, truckId, live) {
+  return L.divIcon({
+    className: "ner-truck-marker",
+
+    html: `
+      <div style="
+        display:flex;
+        flex-direction:column;
+        align-items:center;
+        transform:translateY(-8px);
+      ">
+
+        <div style="
+          background:${color};
+          width:48px;
+          height:48px;
+          border-radius:50%;
+          border:4px solid white;
+          box-shadow:0 4px 14px rgba(0,0,0,0.35);
+          display:flex;
+          align-items:center;
+          justify-content:center;
+          position:relative;
+        ">
+
+          <span style="
+            font-size:22px;
+            line-height:1;
+          ">
+            🚚
+          </span>
+
+          ${
+            live
+              ? `
+                <span style="
+                  position:absolute;
+                  right:-3px;
+                  top:-3px;
+                  width:13px;
+                  height:13px;
+                  border-radius:50%;
+                  background:#22c55e;
+                  border:2px solid white;
+                "></span>
+              `
+              : ""
+          }
+
+        </div>
+
+        <div style="
+          margin-top:4px;
+          background:white;
+          color:#111827;
+          padding:3px 8px;
+          border-radius:6px;
+          font-size:11px;
+          font-weight:700;
+          white-space:nowrap;
+          box-shadow:0 2px 8px rgba(0,0,0,0.25);
+          border:1px solid #e5e7eb;
+        ">
+          ${truckId}
+        </div>
+
+      </div>
+    `,
+
+    iconSize: [100, 75],
+    iconAnchor: [50, 67],
+    popupAnchor: [0, -65],
+  });
+}
+
+// ============================================================
+// MAP AUTO FIT
+// ============================================================
+
+function MapAutoFit({ trucks }) {
+  const map = useMap();
+
+  useEffect(() => {
+    if (!trucks || trucks.length === 0) return;
+
+    const validTrucks = trucks.filter(
+      (truck) =>
+        Number.isFinite(Number(truck.lat)) &&
+        Number.isFinite(Number(truck.lng))
+    );
+
+    if (validTrucks.length === 0) return;
+
+    const bounds = L.latLngBounds(
+      validTrucks.map((truck) => [
+        Number(truck.lat),
+        Number(truck.lng),
+      ])
+    );
+
+    if (validTrucks.length === 1) {
+      map.setView(
+        [
+          Number(validTrucks[0].lat),
+          Number(validTrucks[0].lng),
+        ],
+        14
+      );
+    } else {
+      map.fitBounds(bounds, {
+        padding: [60, 60],
+        maxZoom: 14,
+      });
+    }
+  }, [map, trucks]);
+
+  return null;
+}
+
+// ============================================================
+// STAT CARD
+// ============================================================
+
+function StatCard({
+  icon: Icon,
+  label,
+  value,
+  description,
+}) {
+  return (
+    <div className="bg-[#111827] border border-[#1f2937] rounded-xl p-4">
+      <div className="flex items-center gap-3">
+        <div className="w-10 h-10 rounded-lg bg-[#172033] flex items-center justify-center">
+          <Icon
+            size={18}
+            className="text-cyan-400"
+          />
+        </div>
+
+        <div className="min-w-0">
+          <p className="text-xs text-gray-500">
+            {label}
+          </p>
+
+          <p className="text-xl font-bold text-white">
+            {value}
+          </p>
+
+          {description && (
+            <p className="text-[10px] text-gray-600 mt-0.5">
+              {description}
+            </p>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// STATUS BADGE
+// ============================================================
+
+function StatusBadge({ live }) {
+  return (
+    <span
+      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold ${
+        live
+          ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
+          : "bg-red-500/10 text-red-400 border border-red-500/20"
+      }`}
+    >
+      {live ? (
+        <Wifi size={11} />
+      ) : (
+        <WifiOff size={11} />
+      )}
+
+      {live ? "LIVE" : "OFFLINE"}
+    </span>
+  );
+}
+
+// ============================================================
 // MAIN COMPONENT
-// =====================================================
+// ============================================================
 
 export default function GpsTracker() {
-  const [currentLocation, setCurrentLocation] =
+  const [trucks, setTrucks] = useState([]);
+
+  const [histories, setHistories] = useState({});
+
+  const [serverOnline, setServerOnline] =
+    useState(false);
+
+  const [loading, setLoading] = useState(true);
+
+  const [lastRefresh, setLastRefresh] =
+    useState(Date.now());
+
+  const [selectedTruck, setSelectedTruck] =
     useState(null);
 
-  const [history, setHistory] = useState([]);
+  // ----------------------------------------------------------
+  // GET CURRENT TRUCKS
+  // ----------------------------------------------------------
 
-  const [serverStatus, setServerStatus] =
-    useState("Checking...");
-
-  const [lastUpdate, setLastUpdate] =
-    useState(null);
-
-  const [error, setError] = useState("");
-
-  const [loading, setLoading] =
-    useState(true);
-
-  // ===================================================
-  // FETCH LATEST GPS LOCATION
-  // ===================================================
-
-  const fetchLiveLocation = async () => {
+  const fetchTrucks = useCallback(async () => {
     try {
       const response = await fetch(
         `${API_URL}/get`
@@ -198,278 +364,290 @@ export default function GpsTracker() {
 
       const result = await response.json();
 
-      console.log("LIVE GPS DATA:", result);
+      const data = Array.isArray(result.data)
+        ? result.data
+        : [];
 
-      if (
-        result.data &&
-        Array.isArray(result.data)
-      ) {
-        const truck = result.data.find(
-          (item) =>
-            item.id === TRUCK_ID
-        );
+      const normalized = data
+        .filter(
+          (truck) =>
+            truck &&
+            truck.id &&
+            Number.isFinite(Number(truck.lat)) &&
+            Number.isFinite(Number(truck.lng))
+        )
+        .map((truck, index) => ({
+          ...truck,
+          lat: Number(truck.lat),
+          lng: Number(truck.lng),
+          color: getTruckColor(index),
+        }));
 
-        if (truck) {
-          const location = {
-            lat: Number(truck.lat),
-            lng: Number(truck.lng),
-            timestamp: Number(
-              truck.updatedAt
-            ),
-          };
+      setTrucks(normalized);
 
-          console.log(
-            "TRUCK LOCATION:",
-            location
-          );
+      setServerOnline(true);
 
-          setCurrentLocation(location);
-          setLastUpdate(
-            Number(truck.updatedAt)
-          );
-
-          setServerStatus("Connected");
-          setError("");
-          setLoading(false);
-        } else {
-          setServerStatus("Connected");
-          setLoading(false);
-
-          console.log(
-            `No location found for ${TRUCK_ID}`
-          );
-        }
-      }
-    } catch (err) {
-      console.error(
-        "Failed to fetch live GPS:",
-        err
-      );
-
-      setServerStatus("Offline");
-
-      setError(
-        "Unable to connect to GPS server."
-      );
+      setLastRefresh(Date.now());
 
       setLoading(false);
-    }
-  };
 
-  // ===================================================
-  // FETCH TRAVEL HISTORY
-  // ===================================================
-
-  const fetchHistory = async () => {
-    try {
-      const response = await fetch(
-        `${API_URL}/history/${TRUCK_ID}`
-      );
-
-      if (!response.ok) {
-        throw new Error(
-          `History server returned ${response.status}`
-        );
-      }
-
-      const result =
-        await response.json();
-
-      console.log(
-        "GPS HISTORY:",
-        result
-      );
-
-      if (
-        result.data &&
-        Array.isArray(result.data)
-      ) {
-        const points = result.data
-          .map((item) => ({
-            lat: Number(item.lat),
-            lng: Number(item.lng),
-            timestamp: Number(
-              item.timestamp
-            ),
-          }))
-          .filter(
-            (point) =>
-              Number.isFinite(point.lat) &&
-              Number.isFinite(point.lng)
-          );
-
-        setHistory(points);
-      }
-    } catch (err) {
+      return normalized;
+    } catch (error) {
       console.error(
-        "Failed to fetch history:",
-        err
+        "Unable to fetch trucks:",
+        error
       );
+
+      setServerOnline(false);
+
+      setLoading(false);
+
+      return [];
     }
-  };
-
-  // ===================================================
-  // POLLING
-  // ===================================================
-
-  useEffect(() => {
-    fetchLiveLocation();
-    fetchHistory();
-
-    const locationInterval =
-      setInterval(
-        fetchLiveLocation,
-        POLLING_INTERVAL
-      );
-
-    const historyInterval =
-      setInterval(
-        fetchHistory,
-        POLLING_INTERVAL
-      );
-
-    return () => {
-      clearInterval(
-        locationInterval
-      );
-
-      clearInterval(
-        historyInterval
-      );
-    };
   }, []);
 
-  // ===================================================
-  // CALCULATE TRAVELLED DISTANCE
-  // ===================================================
+  // ----------------------------------------------------------
+  // FETCH HISTORY FOR EVERY TRUCK
+  // ----------------------------------------------------------
 
-  const travelledDistance =
-    useMemo(() => {
-      if (history.length < 2) {
-        return 0;
+  const fetchHistories = useCallback(
+    async (truckList) => {
+      if (!truckList || truckList.length === 0) {
+        return;
       }
 
-      let total = 0;
+      const results = await Promise.all(
+        truckList.map(async (truck) => {
+          try {
+            const response = await fetch(
+              `${API_URL}/history/${encodeURIComponent(
+                truck.id
+              )}`
+            );
 
-      for (
-        let i = 1;
-        i < history.length;
-        i++
-      ) {
-        total += calculateDistance(
-          history[i - 1],
-          history[i]
+            if (!response.ok) {
+              throw new Error(
+                `History returned ${response.status}`
+              );
+            }
+
+            const result = await response.json();
+
+            return {
+              id: truck.id,
+              points: Array.isArray(result.data)
+                ? result.data.map((point) => ({
+                    lat: Number(point.lat),
+                    lng: Number(point.lng),
+                    timestamp: Number(
+                      point.timestamp
+                    ),
+                  }))
+                : [],
+            };
+          } catch (error) {
+            console.error(
+              `History error for ${truck.id}:`,
+              error
+            );
+
+            return {
+              id: truck.id,
+              points: [],
+            };
+          }
+        })
+      );
+
+      const historyMap = {};
+
+      results.forEach((item) => {
+        historyMap[item.id] = item.points;
+      });
+
+      setHistories(historyMap);
+    },
+    []
+  );
+
+  // ----------------------------------------------------------
+  // INITIAL + AUTO REFRESH
+  // ----------------------------------------------------------
+
+  useEffect(() => {
+    let mounted = true;
+
+    const refresh = async () => {
+      const currentTrucks =
+        await fetchTrucks();
+
+      if (mounted) {
+        await fetchHistories(
+          currentTrucks
         );
       }
+    };
 
-      return total;
-    }, [history]);
+    refresh();
 
-  // ===================================================
-  // START POINT
-  // ===================================================
+    const interval = setInterval(
+      refresh,
+      REFRESH_INTERVAL
+    );
 
-  const startPoint =
-    history.length > 0
-      ? history[0]
-      : null;
+    return () => {
+      mounted = false;
+      clearInterval(interval);
+    };
+  }, [
+    fetchTrucks,
+    fetchHistories,
+  ]);
 
-  // ===================================================
-  // MAP CENTER
-  // ===================================================
+  // ----------------------------------------------------------
+  // LIVE TRUCK COUNT
+  // ----------------------------------------------------------
 
-  const mapCenter =
-    currentLocation
-      ? [
-          currentLocation.lat,
-          currentLocation.lng,
-        ]
-      : startPoint
-      ? [
-          startPoint.lat,
-          startPoint.lng,
-        ]
-      : [23.2599, 77.4126];
+  const liveTrucks = useMemo(() => {
+    return trucks.filter((truck) =>
+      isTruckLive(truck.updatedAt)
+    );
+  }, [trucks, lastRefresh]);
 
-  // ===================================================
-  // REFRESH
-  // ===================================================
+  // ----------------------------------------------------------
+  // TOTAL GPS POINTS
+  // ----------------------------------------------------------
 
-  const handleRefresh = () => {
+  const totalPoints = useMemo(() => {
+    return Object.values(histories).reduce(
+      (total, points) =>
+        total + points.length,
+      0
+    );
+  }, [histories]);
+
+  // ----------------------------------------------------------
+  // TOTAL DISTANCE
+  // ----------------------------------------------------------
+
+  const totalDistance = useMemo(() => {
+    return Object.values(histories).reduce(
+      (total, points) =>
+        total + calculateDistance(points),
+      0
+    );
+  }, [histories]);
+
+  // ----------------------------------------------------------
+  // LAST UPDATE
+  // ----------------------------------------------------------
+
+  const latestUpdate = useMemo(() => {
+    if (trucks.length === 0) return null;
+
+    return Math.max(
+      ...trucks.map((truck) =>
+        Number(truck.updatedAt || 0)
+      )
+    );
+  }, [trucks]);
+
+  // ----------------------------------------------------------
+  // MANUAL REFRESH
+  // ----------------------------------------------------------
+
+  const handleRefresh = async () => {
     setLoading(true);
 
-    fetchLiveLocation();
-    fetchHistory();
+    const currentTrucks =
+      await fetchTrucks();
+
+    await fetchHistories(
+      currentTrucks
+    );
   };
 
-  // ===================================================
+  // ----------------------------------------------------------
+  // MAP CENTER
+  // ----------------------------------------------------------
+
+  const mapCenter =
+    trucks.length > 0
+      ? [trucks[0].lat, trucks[0].lng]
+      : [23.5134, 77.8187];
+
+  // ==========================================================
   // UI
-  // ===================================================
+  // ==========================================================
 
   return (
-    <div className="min-h-screen bg-gray-50 text-gray-900">
+    <div className="min-h-screen bg-[#070b14] text-white">
 
-      {/* ============================================= */}
-      {/* HEADER */}
-      {/* ============================================= */}
+      {/* =====================================================
+          HEADER
+      ===================================================== */}
 
-      <header className="bg-white border-b border-gray-200">
-        <div className="max-w-7xl mx-auto px-6 py-5">
+      <header className="border-b border-[#1f2937] bg-[#0b1220] sticky top-0 z-[1000]">
 
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 py-4">
 
-            <div className="flex items-center gap-4">
+          <div className="flex items-center justify-between gap-4">
 
-              <div className="w-12 h-12 rounded-xl bg-blue-600 flex items-center justify-center">
-                <Truck
-                  size={25}
-                  className="text-white"
+            <div className="flex items-center gap-3">
+
+              <div className="w-11 h-11 rounded-xl bg-cyan-500/10 border border-cyan-500/20 flex items-center justify-center">
+                <Satellite
+                  size={22}
+                  className="text-cyan-400"
                 />
               </div>
 
               <div>
-                <h1 className="text-xl font-bold">
-                  GPS Tracking Console
+                <h1 className="text-lg sm:text-xl font-bold tracking-tight">
+                  NER-Logix Control Center
                 </h1>
 
-                <p className="text-sm text-gray-500">
-                  Live Vehicle Monitoring
+                <p className="text-xs text-gray-500">
+                  Smart Logistics & Live Vehicle Intelligence
                 </p>
               </div>
 
             </div>
 
-            <div className="flex items-center gap-3">
+            <div className="flex items-center gap-2">
 
               <div
-                className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-semibold ${
-                  serverStatus ===
-                  "Connected"
-                    ? "bg-green-100 text-green-700"
-                    : "bg-red-100 text-red-700"
+                className={`hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold ${
+                  serverOnline
+                    ? "bg-emerald-500/10 text-emerald-400 border border-emerald-500/20"
+                    : "bg-red-500/10 text-red-400 border border-red-500/20"
                 }`}
               >
-                {serverStatus ===
-                "Connected" ? (
-                  <Wifi size={16} />
-                ) : (
-                  <WifiOff size={16} />
-                )}
 
-                {serverStatus}
+                <span
+                  className={`w-2 h-2 rounded-full ${
+                    serverOnline
+                      ? "bg-emerald-400 animate-pulse"
+                      : "bg-red-400"
+                  }`}
+                />
+
+                {serverOnline
+                  ? "SYSTEM ONLINE"
+                  : "SERVER OFFLINE"}
               </div>
 
               <button
                 onClick={handleRefresh}
-                className="p-2.5 bg-gray-100 hover:bg-gray-200 rounded-lg transition"
+                className="w-9 h-9 rounded-lg border border-[#263244] bg-[#111827] hover:bg-[#172033] flex items-center justify-center transition"
                 title="Refresh"
               >
                 <RefreshCw
-                  size={18}
+                  size={16}
                   className={
                     loading
-                      ? "animate-spin"
-                      : ""
+                      ? "animate-spin text-cyan-400"
+                      : "text-gray-400"
                   }
                 />
               </button>
@@ -479,263 +657,107 @@ export default function GpsTracker() {
           </div>
 
         </div>
+
       </header>
 
-      {/* ============================================= */}
-      {/* MAIN */}
-      {/* ============================================= */}
+      {/* =====================================================
+          MAIN
+      ===================================================== */}
 
-      <main className="max-w-7xl mx-auto px-6 py-6">
+      <main className="max-w-7xl mx-auto px-4 sm:px-6 py-6">
 
-        {/* =========================================== */}
-        {/* TRUCK INFO */}
-        {/* =========================================== */}
+        {/* ===================================================
+            OVERVIEW
+        =================================================== */}
 
-        <div className="bg-white border border-gray-200 rounded-2xl p-5 mb-6 shadow-sm">
+        <div className="grid grid-cols-2 lg:grid-cols-4 gap-3 mb-5">
 
-          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+          <StatCard
+            icon={Truck}
+            label="Active Trucks"
+            value={liveTrucks.length}
+            description={`${trucks.length} connected devices`}
+          />
 
-            <div>
+          <StatCard
+            icon={Activity}
+            label="GPS Points"
+            value={totalPoints.toLocaleString()}
+            description="Recorded locations"
+          />
 
-              <p className="text-sm text-gray-500">
-                Tracking Vehicle
-              </p>
+          <StatCard
+            icon={Route}
+            label="Travel Distance"
+            value={`${totalDistance.toFixed(2)} km`}
+            description="Across all trucks"
+          />
 
-              <div className="flex items-center gap-3 mt-1">
+          <StatCard
+            icon={Clock3}
+            label="Last Update"
+            value={
+              latestUpdate
+                ? formatTime(latestUpdate)
+                : "--"
+            }
+            description={
+              latestUpdate
+                ? formatTimeAgo(latestUpdate)
+                : "Waiting for data"
+            }
+          />
 
-                <h2 className="text-2xl font-bold">
-                  {TRUCK_ID}
+        </div>
+
+        {/* ===================================================
+            MAP
+        =================================================== */}
+
+        <section className="bg-[#0b1220] border border-[#1f2937] rounded-2xl overflow-hidden mb-5">
+
+          {/* MAP HEADER */}
+
+          <div className="px-5 py-4 border-b border-[#1f2937] flex items-center justify-between">
+
+            <div className="flex items-center gap-3">
+
+              <div className="w-10 h-10 rounded-lg bg-cyan-500/10 flex items-center justify-center">
+                <Navigation
+                  size={19}
+                  className="text-cyan-400"
+                />
+              </div>
+
+              <div>
+                <h2 className="font-bold">
+                  Live Fleet Map
                 </h2>
 
-                <span
-                  className={`px-3 py-1 rounded-full text-xs font-bold ${
-                    currentLocation
-                      ? "bg-green-100 text-green-700"
-                      : "bg-gray-100 text-gray-500"
-                  }`}
-                >
-                  {currentLocation
-                    ? "LIVE"
-                    : "WAITING"}
-                </span>
-
+                <p className="text-xs text-gray-500">
+                  Real-time location of all connected vehicles
+                </p>
               </div>
 
             </div>
 
-            <div className="text-sm text-gray-500">
+            <div className="flex items-center gap-2 text-xs text-emerald-400">
 
-              Last update:
+              <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
 
-              <span className="font-semibold text-gray-800 ml-2">
-                {formatTime(
-                  lastUpdate
-                )}
-              </span>
+              {liveTrucks.length} TRUCK
+              {liveTrucks.length !== 1
+                ? "S"
+                : ""}{" "}
+              LIVE
 
             </div>
 
           </div>
 
-        </div>
+          {/* MAP */}
 
-        {/* =========================================== */}
-        {/* STATS */}
-        {/* =========================================== */}
-
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
-
-          {/* Current Location */}
-
-          <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm">
-
-            <div className="flex items-center gap-3">
-
-              <div className="p-3 bg-blue-50 rounded-xl">
-                <MapPin
-                  size={21}
-                  className="text-blue-600"
-                />
-              </div>
-
-              <div>
-                <p className="text-sm text-gray-500">
-                  Current Location
-                </p>
-
-                <p className="font-bold">
-                  {currentLocation
-                    ? `${currentLocation.lat.toFixed(
-                        4
-                      )}, ${currentLocation.lng.toFixed(
-                        4
-                      )}`
-                    : "--"}
-                </p>
-              </div>
-
-            </div>
-
-          </div>
-
-          {/* Distance */}
-
-          <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm">
-
-            <div className="flex items-center gap-3">
-
-              <div className="p-3 bg-green-50 rounded-xl">
-                <Route
-                  size={21}
-                  className="text-green-600"
-                />
-              </div>
-
-              <div>
-
-                <p className="text-sm text-gray-500">
-                  Distance Travelled
-                </p>
-
-                <p className="text-2xl font-bold">
-                  {travelledDistance.toFixed(
-                    2
-                  )}{" "}
-                  <span className="text-sm font-medium">
-                    km
-                  </span>
-                </p>
-
-              </div>
-
-            </div>
-
-          </div>
-
-          {/* GPS Points */}
-
-          <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm">
-
-            <div className="flex items-center gap-3">
-
-              <div className="p-3 bg-purple-50 rounded-xl">
-                <Activity
-                  size={21}
-                  className="text-purple-600"
-                />
-              </div>
-
-              <div>
-
-                <p className="text-sm text-gray-500">
-                  GPS Points
-                </p>
-
-                <p className="text-2xl font-bold">
-                  {history.length}
-                </p>
-
-              </div>
-
-            </div>
-
-          </div>
-
-          {/* Last Update */}
-
-          <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm">
-
-            <div className="flex items-center gap-3">
-
-              <div className="p-3 bg-orange-50 rounded-xl">
-                <Clock
-                  size={21}
-                  className="text-orange-600"
-                />
-              </div>
-
-              <div>
-
-                <p className="text-sm text-gray-500">
-                  Last GPS Update
-                </p>
-
-                <p className="font-bold">
-                  {lastUpdate
-                    ? formatTime(
-                        lastUpdate
-                      )
-                    : "--"}
-                </p>
-
-              </div>
-
-            </div>
-
-          </div>
-
-        </div>
-
-        {/* =========================================== */}
-        {/* ERROR */}
-        {/* =========================================== */}
-
-        {error && (
-          <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 mb-6">
-            <div className="flex items-center gap-2">
-              <WifiOff size={18} />
-              <span className="font-medium">
-                {error}
-              </span>
-            </div>
-          </div>
-        )}
-
-        {/* =========================================== */}
-        {/* MAP */}
-        {/* =========================================== */}
-
-        <div className="bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden mb-6">
-
-          <div className="p-5 border-b border-gray-200">
-
-            <div className="flex items-center justify-between">
-
-              <div className="flex items-center gap-3">
-
-                <div className="p-2.5 bg-blue-50 rounded-xl">
-                  <Navigation
-                    size={21}
-                    className="text-blue-600"
-                  />
-                </div>
-
-                <div>
-
-                  <h2 className="font-bold text-lg">
-                    Live Vehicle Map
-                  </h2>
-
-                  <p className="text-sm text-gray-500">
-                    Real-time mobile GPS tracking
-                  </p>
-
-                </div>
-
-              </div>
-
-              {currentLocation && (
-                <div className="flex items-center gap-2 text-green-600 text-sm font-semibold">
-                  <span className="w-2.5 h-2.5 bg-green-500 rounded-full animate-pulse" />
-                  Live
-                </div>
-              )}
-
-            </div>
-
-          </div>
-
-          <div className="h-[500px]">
+          <div className="h-[500px] sm:h-[600px]">
 
             <MapContainer
               center={mapCenter}
@@ -745,139 +767,464 @@ export default function GpsTracker() {
             >
 
               <TileLayer
-                attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+                attribution='&copy; OpenStreetMap contributors'
                 url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
               />
 
-              {/* Auto move map to truck */}
-
-              <MapUpdater
-                location={
-                  currentLocation
-                }
+              <MapAutoFit
+                trucks={trucks}
               />
 
-              {/* ================================= */}
-              {/* TRAVELLED ROUTE */}
-              {/* ================================= */}
+              {/* ==========================================
+                  TRUCKS
+              ========================================== */}
 
-              {history.length > 1 && (
-                <Polyline
-                  positions={history.map(
-                    (point) => [
-                      point.lat,
-                      point.lng,
-                    ]
-                  )}
-                  pathOptions={{
-                    color: "#2563eb",
-                    weight: 5,
-                    opacity: 0.85,
-                  }}
+              {trucks.map((truck, index) => {
+
+                const live = isTruckLive(
+                  truck.updatedAt
+                );
+
+                const history =
+                  histories[truck.id] || [];
+
+                const color =
+                  getTruckColor(index);
+
+                const markerIcon =
+                  createTruckIcon(
+                    color,
+                    truck.id,
+                    live
+                  );
+
+                return (
+                  <React.Fragment
+                    key={truck.id}
+                  >
+
+                    {/* TRAVELLED ROUTE */}
+
+                    {/* {history.length >= 2 && (
+                      <Polyline
+                        positions={history.map(
+                          (point) => [
+                            point.lat,
+                            point.lng,
+                          ]
+                        )}
+                        pathOptions={{
+                          color,
+                          weight: 4,
+                          opacity: 0.8,
+                        }}
+                      />
+                    )} */}
+
+                    {/* START POINT */}
+
+                    {history.length > 0 && (
+                      <CircleMarker
+                        center={[
+                          history[0].lat,
+                          history[0].lng,
+                        ]}
+                        radius={7}
+                        pathOptions={{
+                          color: "#ffffff",
+                          weight: 2,
+                          fillColor: "#16a34a",
+                          fillOpacity: 1,
+                        }}
+                      >
+
+                        <Popup>
+                          <div className="text-sm">
+                            <strong>
+                              {truck.id}
+                            </strong>
+
+                            <br />
+
+                            <span>
+                              Tracking Start
+                            </span>
+
+                            <br />
+
+                            {history[0].lat.toFixed(
+                              6
+                            )}
+                            ,{" "}
+                            {history[0].lng.toFixed(
+                              6
+                            )}
+                          </div>
+                        </Popup>
+
+                      </CircleMarker>
+                    )}
+
+                    {/* CURRENT TRUCK */}
+
+                    <Marker
+                      position={[
+                        truck.lat,
+                        truck.lng,
+                      ]}
+                      icon={markerIcon}
+                      eventHandlers={{
+                        click: () =>
+                          setSelectedTruck(
+                            truck.id
+                          ),
+                      }}
+                    >
+
+                      <Popup>
+
+                        <div className="min-w-[220px]">
+
+                          <div className="flex items-center justify-between gap-3 mb-3">
+
+                            <div className="font-bold text-gray-900">
+                              {truck.id}
+                            </div>
+
+                            <span
+                              className={`text-[10px] font-bold px-2 py-1 rounded-full ${
+                                live
+                                  ? "bg-green-100 text-green-700"
+                                  : "bg-red-100 text-red-700"
+                              }`}
+                            >
+                              {live
+                                ? "LIVE"
+                                : "OFFLINE"}
+                            </span>
+
+                          </div>
+
+                          <div className="space-y-2 text-xs">
+
+                            <div className="flex justify-between">
+                              <span className="text-gray-500">
+                                Latitude
+                              </span>
+
+                              <strong>
+                                {truck.lat.toFixed(
+                                  6
+                                )}
+                              </strong>
+                            </div>
+
+                            <div className="flex justify-between">
+                              <span className="text-gray-500">
+                                Longitude
+                              </span>
+
+                              <strong>
+                                {truck.lng.toFixed(
+                                  6
+                                )}
+                              </strong>
+                            </div>
+
+                            <div className="flex justify-between">
+                              <span className="text-gray-500">
+                                GPS Points
+                              </span>
+
+                              <strong>
+                                {history.length}
+                              </strong>
+                            </div>
+
+                            <div className="flex justify-between">
+                              <span className="text-gray-500">
+                                Last Update
+                              </span>
+
+                              <strong>
+                                {formatTimeAgo(
+                                  truck.updatedAt
+                                )}
+                              </strong>
+                            </div>
+
+                          </div>
+
+                        </div>
+
+                      </Popup>
+
+                    </Marker>
+
+                  </React.Fragment>
+                );
+              })}
+
+            </MapContainer>
+
+          </div>
+
+          {/* MAP LEGEND */}
+
+          <div className="px-5 py-3 border-t border-[#1f2937] flex flex-wrap items-center gap-5 text-xs text-gray-500">
+
+            <div className="flex items-center gap-2">
+              <span className="text-base">
+                🚚
+              </span>
+              Live Truck
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className="w-3 h-3 rounded-full bg-green-500 border-2 border-white" />
+              Start Point
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className="w-7 h-[3px] bg-cyan-400 rounded" />
+              Travelled Route
+            </div>
+
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-green-400 animate-pulse" />
+              Live
+            </div>
+
+          </div>
+
+        </section>
+
+        {/* ===================================================
+            ACTIVE VEHICLES
+        =================================================== */}
+
+        <section className="bg-[#0b1220] border border-[#1f2937] rounded-2xl overflow-hidden">
+
+          <div className="px-5 py-4 border-b border-[#1f2937]">
+
+            <div className="flex items-center gap-3">
+
+              <div className="w-10 h-10 rounded-lg bg-blue-500/10 flex items-center justify-center">
+                <Truck
+                  size={19}
+                  className="text-blue-400"
                 />
-              )}
+              </div>
 
-              {/* ================================= */}
-              {/* START POINT */}
-              {/* ================================= */}
+              <div>
+                <h2 className="font-bold">
+                  Active Fleet
+                </h2>
 
-              {startPoint && (
-                <Marker
-                  position={[
-                    startPoint.lat,
-                    startPoint.lng,
-                  ]}
-                  icon={startIcon}
-                >
-                  <Popup>
-                    <div className="text-sm">
-                      <strong>
-                        Tracking Start
-                      </strong>
+                <p className="text-xs text-gray-500">
+                  Live driver device status
+                </p>
+              </div>
 
-                      <br />
+            </div>
 
-                      {startPoint.lat.toFixed(
-                        6
-                      )}
-                      ,{" "}
-                      {startPoint.lng.toFixed(
-                        6
-                      )}
+          </div>
+
+          {/* EMPTY STATE */}
+
+          {trucks.length === 0 ? (
+
+            <div className="py-16 text-center">
+
+              <div className="w-14 h-14 rounded-full bg-gray-800 mx-auto flex items-center justify-center mb-4">
+
+                <Truck
+                  size={25}
+                  className="text-gray-600"
+                />
+
+              </div>
+
+              <h3 className="font-semibold text-gray-400">
+                No vehicles connected
+              </h3>
+
+              <p className="text-xs text-gray-600 mt-1">
+                Open a driver tracking link on a mobile device.
+              </p>
+
+            </div>
+
+          ) : (
+
+            <div className="divide-y divide-[#1f2937]">
+
+              {trucks.map((truck, index) => {
+
+                const live =
+                  isTruckLive(
+                    truck.updatedAt
+                  );
+
+                const history =
+                  histories[truck.id] || [];
+
+                const distance =
+                  calculateDistance(
+                    history
+                  );
+
+                const color =
+                  getTruckColor(index);
+
+                return (
+                  <div
+                    key={truck.id}
+                    onClick={() =>
+                      setSelectedTruck(
+                        selectedTruck ===
+                          truck.id
+                          ? null
+                          : truck.id
+                      )
+                    }
+                    className={`p-4 sm:p-5 cursor-pointer transition ${
+                      selectedTruck ===
+                      truck.id
+                        ? "bg-[#111827]"
+                        : "hover:bg-[#0f172a]"
+                    }`}
+                  >
+
+                    <div className="flex items-center justify-between gap-4">
+
+                      {/* LEFT */}
+
+                      <div className="flex items-center gap-3 min-w-0">
+
+                        <div
+                          className="w-11 h-11 rounded-xl flex items-center justify-center text-xl shrink-0"
+                          style={{
+                            backgroundColor:
+                              `${color}20`,
+                            border: `1px solid ${color}40`,
+                          }}
+                        >
+                          🚚
+                        </div>
+
+                        <div className="min-w-0">
+
+                          <div className="flex items-center gap-2 flex-wrap">
+
+                            <h3 className="font-bold text-sm sm:text-base">
+                              {truck.id}
+                            </h3>
+
+                            <StatusBadge
+                              live={live}
+                            />
+
+                          </div>
+
+                          <p className="font-mono text-[11px] text-gray-500 mt-1">
+
+                            {truck.lat.toFixed(
+                              6
+                            )}
+
+                            {" , "}
+
+                            {truck.lng.toFixed(
+                              6
+                            )}
+
+                          </p>
+
+                        </div>
+
+                      </div>
+
+                      {/* RIGHT */}
+
+                      <div className="hidden sm:flex items-center gap-7 text-right">
+
+                        <div>
+                          <p className="text-[10px] text-gray-600">
+                            GPS POINTS
+                          </p>
+
+                          <p className="font-semibold text-sm">
+                            {history.length}
+                          </p>
+                        </div>
+
+                        <div>
+                          <p className="text-[10px] text-gray-600">
+                            DISTANCE
+                          </p>
+
+                          <p className="font-semibold text-sm">
+                            {distance.toFixed(2)} km
+                          </p>
+                        </div>
+
+                        <div>
+                          <p className="text-[10px] text-gray-600">
+                            LAST UPDATE
+                          </p>
+
+                          <p className="font-semibold text-sm">
+                            {formatTime(
+                              truck.updatedAt
+                            )}
+                          </p>
+                        </div>
+
+                      </div>
+
                     </div>
-                  </Popup>
-                </Marker>
-              )}
 
-              {/* ================================= */}
-              {/* GPS HISTORY POINTS */}
-              {/* ================================= */}
+                    {/* MOBILE DETAILS */}
 
-              {history.map(
-                (point, index) => (
-                  <CircleMarker
-                    key={`${point.timestamp}-${index}`}
-                    center={[
-                      point.lat,
-                      point.lng,
-                    ]}
-                    radius={3}
-                    pathOptions={{
-                      color: "#2563eb",
-                      fillColor:
-                        "#2563eb",
-                      fillOpacity: 0.8,
-                    }}
-                  />
-                )
-              )}
+                    <div className="grid grid-cols-3 gap-3 mt-4 sm:hidden">
 
-              {/* ================================= */}
-              {/* CURRENT TRUCK */}
-              {/* ================================= */}
+                      <div className="bg-[#070b14] rounded-lg p-3">
 
-              {currentLocation && (
-                <Marker
-                  position={[
-                    currentLocation.lat,
-                    currentLocation.lng,
-                  ]}
-                  icon={truckIcon}
-                >
-                  <Popup>
-
-                    <div className="min-w-[180px]">
-
-                      <h3 className="font-bold text-base mb-2">
-                        🚛 {TRUCK_ID}
-                      </h3>
-
-                      <div className="text-sm space-y-1">
-
-                        <p>
-                          <strong>
-                            Latitude:
-                          </strong>{" "}
-                          {currentLocation.lat.toFixed(
-                            6
-                          )}
+                        <p className="text-[9px] text-gray-600">
+                          GPS POINTS
                         </p>
 
-                        <p>
-                          <strong>
-                            Longitude:
-                          </strong>{" "}
-                          {currentLocation.lng.toFixed(
-                            6
-                          )}
+                        <p className="text-sm font-bold mt-1">
+                          {history.length}
                         </p>
 
-                        <p>
-                          <strong>
-                            Updated:
-                          </strong>{" "}
-                          {formatTime(
-                            currentLocation.timestamp
+                      </div>
+
+                      <div className="bg-[#070b14] rounded-lg p-3">
+
+                        <p className="text-[9px] text-gray-600">
+                          DISTANCE
+                        </p>
+
+                        <p className="text-sm font-bold mt-1">
+                          {distance.toFixed(
+                            1
+                          )}{" "}
+                          km
+                        </p>
+
+                      </div>
+
+                      <div className="bg-[#070b14] rounded-lg p-3">
+
+                        <p className="text-[9px] text-gray-600">
+                          UPDATED
+                        </p>
+
+                        <p className="text-sm font-bold mt-1">
+                          {formatTimeAgo(
+                            truck.updatedAt
                           )}
                         </p>
 
@@ -885,372 +1232,28 @@ export default function GpsTracker() {
 
                     </div>
 
-                  </Popup>
-                </Marker>
-              )}
-
-            </MapContainer>
-
-          </div>
-
-        </div>
-
-        {/* =========================================== */}
-        {/* CURRENT GPS INFORMATION */}
-        {/* =========================================== */}
-
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-
-          {/* Current Position */}
-
-          <div className="bg-white border border-gray-200 rounded-2xl p-6 shadow-sm">
-
-            <div className="flex items-center gap-3 mb-5">
-
-              <div className="p-3 bg-blue-50 rounded-xl">
-                <MapPin
-                  size={22}
-                  className="text-blue-600"
-                />
-              </div>
-
-              <div>
-
-                <h3 className="font-bold text-lg">
-                  Current GPS Position
-                </h3>
-
-                <p className="text-sm text-gray-500">
-                  Location received from driver phone
-                </p>
-
-              </div>
+                  </div>
+                );
+              })}
 
             </div>
-
-            {currentLocation ? (
-              <div className="space-y-3">
-
-                <div className="flex justify-between bg-gray-50 rounded-xl p-4">
-
-                  <span className="text-gray-500">
-                    Latitude
-                  </span>
-
-                  <span className="font-mono font-semibold">
-                    {currentLocation.lat.toFixed(
-                      6
-                    )}
-                  </span>
-
-                </div>
-
-                <div className="flex justify-between bg-gray-50 rounded-xl p-4">
-
-                  <span className="text-gray-500">
-                    Longitude
-                  </span>
-
-                  <span className="font-mono font-semibold">
-                    {currentLocation.lng.toFixed(
-                      6
-                    )}
-                  </span>
-
-                </div>
-
-                <div className="flex justify-between bg-gray-50 rounded-xl p-4">
-
-                  <span className="text-gray-500">
-                    Last Updated
-                  </span>
-
-                  <span className="font-semibold">
-                    {formatTime(
-                      currentLocation.timestamp
-                    )}
-                  </span>
-
-                </div>
-
-              </div>
-            ) : (
-              <div className="py-12 text-center text-gray-400">
-
-                <Navigation
-                  size={40}
-                  className="mx-auto mb-3"
-                />
-
-                <p>
-                  Waiting for TRUCK-001
-                </p>
-
-                <p className="text-sm mt-1">
-                  Start tracking from the driver phone
-                </p>
-
-              </div>
-            )}
-
-          </div>
-
-          {/* Tracking Status */}
-
-          <div className="bg-white border border-gray-200 rounded-2xl p-6 shadow-sm">
-
-            <div className="flex items-center gap-3 mb-5">
-
-              <div className="p-3 bg-green-50 rounded-xl">
-                <Activity
-                  size={22}
-                  className="text-green-600"
-                />
-              </div>
-
-              <div>
-
-                <h3 className="font-bold text-lg">
-                  Tracking Status
-                </h3>
-
-                <p className="text-sm text-gray-500">
-                  Live connection information
-                </p>
-
-              </div>
-
-            </div>
-
-            <div className="space-y-4">
-
-              <div className="flex justify-between items-center">
-
-                <span className="text-gray-500">
-                  Vehicle
-                </span>
-
-                <span className="font-semibold">
-                  {TRUCK_ID}
-                </span>
-
-              </div>
-
-              <div className="flex justify-between items-center">
-
-                <span className="text-gray-500">
-                  Server
-                </span>
-
-                <span
-                  className={`font-semibold ${
-                    serverStatus ===
-                    "Connected"
-                      ? "text-green-600"
-                      : "text-red-600"
-                  }`}
-                >
-                  {serverStatus}
-                </span>
-
-              </div>
-
-              <div className="flex justify-between items-center">
-
-                <span className="text-gray-500">
-                  GPS Status
-                </span>
-
-                <span
-                  className={`font-semibold ${
-                    currentLocation
-                      ? "text-green-600"
-                      : "text-gray-500"
-                  }`}
-                >
-                  {currentLocation
-                    ? "Receiving GPS"
-                    : "No GPS data"}
-                </span>
-
-              </div>
-
-              <div className="flex justify-between items-center">
-
-                <span className="text-gray-500">
-                  Points Recorded
-                </span>
-
-                <span className="font-semibold">
-                  {history.length}
-                </span>
-
-              </div>
-
-              <div className="flex justify-between items-center">
-
-                <span className="text-gray-500">
-                  Update Frequency
-                </span>
-
-                <span className="font-semibold">
-                  3 seconds
-                </span>
-
-              </div>
-
-            </div>
-
-          </div>
-
-        </div>
-
-        {/* =========================================== */}
-        {/* GPS HISTORY */}
-        {/* =========================================== */}
-
-        <div className="bg-white border border-gray-200 rounded-2xl shadow-sm mt-6 overflow-hidden">
-
-          <div className="p-5 border-b border-gray-200">
-
-            <div className="flex items-center gap-3">
-
-              <div className="p-2.5 bg-purple-50 rounded-xl">
-                <Route
-                  size={21}
-                  className="text-purple-600"
-                />
-              </div>
-
-              <div>
-
-                <h2 className="font-bold text-lg">
-                  GPS Movement History
-                </h2>
-
-                <p className="text-sm text-gray-500">
-                  Recorded positions from driver phone
-                </p>
-
-              </div>
-
-            </div>
-
-          </div>
-
-          {history.length > 0 ? (
-
-            <div className="overflow-x-auto">
-
-              <table className="w-full text-sm">
-
-                <thead className="bg-gray-50">
-
-                  <tr>
-
-                    <th className="text-left px-5 py-3 font-semibold text-gray-500">
-                      #
-                    </th>
-
-                    <th className="text-left px-5 py-3 font-semibold text-gray-500">
-                      Latitude
-                    </th>
-
-                    <th className="text-left px-5 py-3 font-semibold text-gray-500">
-                      Longitude
-                    </th>
-
-                    <th className="text-left px-5 py-3 font-semibold text-gray-500">
-                      Time
-                    </th>
-
-                  </tr>
-
-                </thead>
-
-                <tbody>
-
-                  {[...history]
-                    .reverse()
-                    .slice(0, 20)
-                    .map(
-                      (
-                        point,
-                        index
-                      ) => (
-                        <tr
-                          key={`${point.timestamp}-${index}`}
-                          className="border-t border-gray-100"
-                        >
-
-                          <td className="px-5 py-3 font-medium">
-                            {index + 1}
-                          </td>
-
-                          <td className="px-5 py-3 font-mono">
-                            {point.lat.toFixed(
-                              6
-                            )}
-                          </td>
-
-                          <td className="px-5 py-3 font-mono">
-                            {point.lng.toFixed(
-                              6
-                            )}
-                          </td>
-
-                          <td className="px-5 py-3 text-gray-500">
-                            {formatTime(
-                              point.timestamp
-                            )}
-                          </td>
-
-                        </tr>
-                      )
-                    )}
-
-                </tbody>
-
-              </table>
-
-            </div>
-
-          ) : (
-
-            <div className="py-12 text-center text-gray-400">
-
-              <MapPin
-                size={38}
-                className="mx-auto mb-3"
-              />
-
-              <p className="font-medium">
-                No GPS data
-              </p>
-
-              <p className="text-sm mt-1">
-                Start tracking from the driver phone
-              </p>
-
-            </div>
-
           )}
 
-        </div>
+        </section>
 
-        {/* =========================================== */}
-        {/* FOOTER */}
-        {/* =========================================== */}
+        {/* ===================================================
+            FOOTER
+        =================================================== */}
 
-        <div className="text-center text-xs text-gray-400 py-8">
+        <div className="flex items-center justify-center gap-2 text-[10px] text-gray-700 py-6">
 
-          <p>
-            NER-Logix • Live GPS Vehicle Tracking
-          </p>
+          <CircleDot size={10} />
 
-          <p className="mt-1">
-            Monitoring {TRUCK_ID}
-          </p>
+          NER-Logix · Multi-Vehicle GPS Tracking
+
+          <span>·</span>
+
+          Updates every {REFRESH_INTERVAL / 1000}s
 
         </div>
 

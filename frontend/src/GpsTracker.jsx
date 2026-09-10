@@ -1,143 +1,153 @@
-import {
-  useState,
-  useEffect,
-  useRef,
-  useMemo,
-} from "react";
-
-import {
-  Satellite,
-  Navigation,
-  Radio,
-  MapPin,
-  TriangleAlert,
-  Wifi,
-  WifiOff,
-  Truck,
-  Target,
-  Route,
-  Activity,
-} from "lucide-react";
-
+import React, { useEffect, useMemo, useState } from "react";
 import {
   MapContainer,
   TileLayer,
   Marker,
   Popup,
   Polyline,
+  CircleMarker,
   useMap,
 } from "react-leaflet";
 
+import {
+  Truck,
+  MapPin,
+  Navigation,
+  Activity,
+  Route,
+  Clock,
+  Wifi,
+  WifiOff,
+  RefreshCw,
+} from "lucide-react";
+
 import L from "leaflet";
 
-// ============================================================
-// CONFIGURATION
-// ============================================================
-
-const TRUCK_ID = "TRUCK-001";
-
-// ============================================================
-// SEVEN SISTERS ROUTE
-// ============================================================
-
-const SEVEN_SISTERS_ROUTE = [
-  {
-    name: "Guwahati",
-    state: "Assam",
-    lat: 26.1445,
-    lng: 91.7362,
-  },
-  {
-    name: "Shillong",
-    state: "Meghalaya",
-    lat: 25.5788,
-    lng: 91.8933,
-  },
-  {
-    name: "Agartala",
-    state: "Tripura",
-    lat: 23.8315,
-    lng: 91.2868,
-  },
-  {
-    name: "Aizawl",
-    state: "Mizoram",
-    lat: 23.7271,
-    lng: 92.7176,
-  },
-  {
-    name: "Imphal",
-    state: "Manipur",
-    lat: 24.817,
-    lng: 93.9368,
-  },
-  {
-    name: "Kohima",
-    state: "Nagaland",
-    lat: 25.6751,
-    lng: 94.1086,
-  },
-  {
-    name: "Itanagar",
-    state: "Arunachal Pradesh",
-    lat: 27.0844,
-    lng: 93.6053,
-  },
-];
-
-// ============================================================
-// DESTINATION
-// ============================================================
-
-const DESTINATION =
-  SEVEN_SISTERS_ROUTE[
-    SEVEN_SISTERS_ROUTE.length - 1
-  ];
-
+// =====================================================
+// CONFIG
+// =====================================================
 
 const API_URL = "https://ner-logix-vgvp.onrender.com";
+const TRUCK_ID = "TRUCK-001";
 
-// ============================================================
-// API HELPER
-// ============================================================
+const POLLING_INTERVAL = 3000;
 
-async function callApi(url, options = {}) {
-  const response = await fetch(url, options);
+// =====================================================
+// TRUCK ICON
+// =====================================================
 
-  if (!response.ok) {
-    throw new Error(
-      `${url} returned ${response.status}`
+const truckIcon = L.divIcon({
+  className: "",
+  html: `
+    <div style="
+      width: 42px;
+      height: 42px;
+      border-radius: 50%;
+      background: #2563eb;
+      border: 4px solid white;
+      box-shadow: 0 3px 12px rgba(0,0,0,0.3);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-size: 20px;
+    ">
+      🚛
+    </div>
+  `,
+  iconSize: [42, 42],
+  iconAnchor: [21, 21],
+  popupAnchor: [0, -21],
+});
+
+// =====================================================
+// START POINT ICON
+// =====================================================
+
+const startIcon = L.divIcon({
+  className: "",
+  html: `
+    <div style="
+      width: 34px;
+      height: 34px;
+      border-radius: 50%;
+      background: #16a34a;
+      border: 4px solid white;
+      box-shadow: 0 3px 10px rgba(0,0,0,0.25);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-size: 16px;
+    ">
+      S
+    </div>
+  `,
+  iconSize: [34, 34],
+  iconAnchor: [17, 17],
+});
+
+// =====================================================
+// MAP AUTO CENTER
+// =====================================================
+
+function MapUpdater({ location }) {
+  const map = useMap();
+
+  useEffect(() => {
+    if (!location) return;
+
+    map.setView(
+      [location.lat, location.lng],
+      Math.max(map.getZoom(), 14),
+      {
+        animate: true,
+      }
     );
-  }
+  }, [location, map]);
 
-  return response.json();
+  return null;
 }
 
-// ============================================================
-// DISTANCE CALCULATION
-// ============================================================
+// =====================================================
+// FORMAT TIME
+// =====================================================
 
-function calculateDistance(
-  lat1,
-  lng1,
-  lat2,
-  lng2
-) {
+function formatTime(timestamp) {
+  if (!timestamp) return "--";
+
+  return new Date(timestamp).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+// =====================================================
+// DISTANCE BETWEEN TWO GPS POINTS
+// =====================================================
+
+function calculateDistance(point1, point2) {
+  if (!point1 || !point2) return 0;
+
   const R = 6371;
 
-  const dLat =
-    ((lat2 - lat1) * Math.PI) / 180;
+  const lat1 = (point1.lat * Math.PI) / 180;
+  const lat2 = (point2.lat * Math.PI) / 180;
 
-  const dLng =
-    ((lng2 - lng1) * Math.PI) / 180;
+  const deltaLat =
+    ((point2.lat - point1.lat) * Math.PI) / 180;
+
+  const deltaLng =
+    ((point2.lng - point1.lng) * Math.PI) / 180;
 
   const a =
-    Math.sin(dLat / 2) *
-      Math.sin(dLat / 2) +
-    Math.cos((lat1 * Math.PI) / 180) *
-      Math.cos((lat2 * Math.PI) / 180) *
-      Math.sin(dLng / 2) *
-      Math.sin(dLng / 2);
+    Math.sin(deltaLat / 2) *
+      Math.sin(deltaLat / 2) +
+    Math.cos(lat1) *
+      Math.cos(lat2) *
+      Math.sin(deltaLng / 2) *
+      Math.sin(deltaLng / 2);
 
   const c =
     2 *
@@ -149,1036 +159,1102 @@ function calculateDistance(
   return R * c;
 }
 
-// ============================================================
-// TOTAL TRAVELLED DISTANCE
-// ============================================================
-
-function calculateTotalDistance(points) {
-  if (!points || points.length < 2) {
-    return 0;
-  }
-
-  let total = 0;
-
-  for (let i = 1; i < points.length; i++) {
-    total += calculateDistance(
-      points[i - 1][0],
-      points[i - 1][1],
-      points[i][0],
-      points[i][1]
-    );
-  }
-
-  return total;
-}
-
-// ============================================================
-// TRUCK ICON
-// ============================================================
-
-function createTruckIcon() {
-  return L.divIcon({
-    className: "",
-    html: `
-      <div
-        style="
-          width:42px;
-          height:42px;
-          border-radius:50%;
-          background:#06b6d4;
-          border:3px solid white;
-          box-shadow:0 4px 18px rgba(0,0,0,0.45);
-          display:flex;
-          align-items:center;
-          justify-content:center;
-          font-size:22px;
-        "
-      >
-        🚚
-      </div>
-    `,
-    iconSize: [42, 42],
-    iconAnchor: [21, 21],
-    popupAnchor: [0, -22],
-  });
-}
-
-// ============================================================
-// START ICON
-// ============================================================
-
-function createStartIcon() {
-  return L.divIcon({
-    className: "",
-    html: `
-      <div
-        style="
-          width:34px;
-          height:34px;
-          border-radius:50%;
-          background:#22c55e;
-          border:3px solid white;
-          box-shadow:0 3px 12px rgba(0,0,0,0.4);
-          display:flex;
-          align-items:center;
-          justify-content:center;
-          color:white;
-          font-size:18px;
-          font-weight:bold;
-        "
-      >
-        S
-      </div>
-    `,
-    iconSize: [34, 34],
-    iconAnchor: [17, 17],
-    popupAnchor: [0, -17],
-  });
-}
-
-// ============================================================
-// DESTINATION ICON
-// ============================================================
-
-function createDestinationIcon() {
-  return L.divIcon({
-    className: "",
-    html: `
-      <div
-        style="
-          width:38px;
-          height:38px;
-          border-radius:50%;
-          background:#ef4444;
-          border:3px solid white;
-          box-shadow:0 3px 15px rgba(0,0,0,0.45);
-          display:flex;
-          align-items:center;
-          justify-content:center;
-          font-size:20px;
-        "
-      >
-        🎯
-      </div>
-    `,
-    iconSize: [38, 38],
-    iconAnchor: [19, 19],
-    popupAnchor: [0, -19],
-  });
-}
-
-// ============================================================
-// STOP ICON
-// ============================================================
-
-function createStopIcon(number) {
-  return L.divIcon({
-    className: "",
-    html: `
-      <div
-        style="
-          width:28px;
-          height:28px;
-          border-radius:50%;
-          background:#334155;
-          border:2px solid #94a3b8;
-          display:flex;
-          align-items:center;
-          justify-content:center;
-          color:white;
-          font-size:12px;
-          font-weight:bold;
-        "
-      >
-        ${number}
-      </div>
-    `,
-    iconSize: [28, 28],
-    iconAnchor: [14, 14],
-  });
-}
-
-// ============================================================
-// MAP FOLLOW CONTROLLER
-// ============================================================
-
-function MapController({ position }) {
-  const map = useMap();
-
-  useEffect(() => {
-    if (!position) {
-      return;
-    }
-
-    map.flyTo(
-      [position.lat, position.lng],
-      map.getZoom() < 8 ? 8 : map.getZoom(),
-      {
-        duration: 1,
-      }
-    );
-  }, [position, map]);
-
-  return null;
-}
-
-// ============================================================
-// ROUTE MAP
-// ============================================================
-
-function TrackingMap({
-  currentPosition,
-  history,
-}) {
-  // ----------------------------------------------------------
-  // START POINT
-  // ----------------------------------------------------------
-
-  const startPoint =
-    history.length > 0
-      ? history[0]
-      : currentPosition
-      ? [
-          currentPosition.lat,
-          currentPosition.lng,
-        ]
-      : null;
-
-  // ----------------------------------------------------------
-  // CURRENT POSITION
-  // ----------------------------------------------------------
-
-  const currentPoint = currentPosition
-    ? [
-        currentPosition.lat,
-        currentPosition.lng,
-      ]
-    : null;
-
-  // ----------------------------------------------------------
-  // DESTINATION
-  // ----------------------------------------------------------
-
-  const destinationPoint = [
-    DESTINATION.lat,
-    DESTINATION.lng,
-  ];
-
-  // ----------------------------------------------------------
-  // INITIAL MAP CENTER
-  // ----------------------------------------------------------
-
-  const mapCenter =
-    currentPoint ||
-    [
-      SEVEN_SISTERS_ROUTE[0].lat,
-      SEVEN_SISTERS_ROUTE[0].lng,
-    ];
-
-  // ----------------------------------------------------------
-  // PLANNED ROUTE
-  // ----------------------------------------------------------
-
-  const plannedRoute =
-    SEVEN_SISTERS_ROUTE.map(
-      (point) => [
-        point.lat,
-        point.lng,
-      ]
-    );
-
-  return (
-    <MapContainer
-      center={mapCenter}
-      zoom={7}
-      scrollWheelZoom={true}
-      className="h-full w-full"
-    >
-
-      {/* ================================================== */}
-      {/* OPEN STREET MAP */}
-      {/* ================================================== */}
-
-      <TileLayer
-        attribution="&copy; OpenStreetMap contributors"
-        url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
-      />
-
-      {/* ================================================== */}
-      {/* FOLLOW TRUCK */}
-      {/* ================================================== */}
-
-      <MapController
-        position={currentPosition}
-      />
-
-      {/* ================================================== */}
-      {/* PLANNED ROUTE */}
-      {/* ================================================== */}
-
-      <Polyline
-        positions={plannedRoute}
-        pathOptions={{
-          color: "#64748b",
-          weight: 4,
-          opacity: 0.75,
-          dashArray: "10 10",
-        }}
-      />
-
-      {/* ================================================== */}
-      {/* ACTUAL TRAVELLED PATH */}
-      {/* ================================================== */}
-
-      {history.length >= 2 && (
-        <Polyline
-          positions={history}
-          pathOptions={{
-            color: "#06b6d4",
-            weight: 6,
-            opacity: 0.95,
-          }}
-        />
-      )}
-
-      {/* ================================================== */}
-      {/* START MARKER */}
-      {/* ================================================== */}
-
-      {startPoint && (
-        <Marker
-          position={startPoint}
-          icon={createStartIcon()}
-        >
-          <Popup>
-            <div>
-              <strong>
-                Tracking Started
-              </strong>
-
-              <br />
-
-              <span>
-                First GPS location
-              </span>
-
-              <br />
-
-              <small>
-                {startPoint[0].toFixed(6)},
-                {" "}
-                {startPoint[1].toFixed(6)}
-              </small>
-            </div>
-          </Popup>
-        </Marker>
-      )}
-
-      {/* ================================================== */}
-      {/* ROUTE STOP MARKERS */}
-      {/* ================================================== */}
-
-      {SEVEN_SISTERS_ROUTE.map(
-        (stop, index) => {
-          const isDestination =
-            index ===
-            SEVEN_SISTERS_ROUTE.length - 1;
-
-          if (isDestination) {
-            return null;
-          }
-
-          return (
-            <Marker
-              key={stop.name}
-              position={[
-                stop.lat,
-                stop.lng,
-              ]}
-              icon={createStopIcon(
-                index + 1
-              )}
-            >
-              <Popup>
-                <strong>
-                  {stop.name}
-                </strong>
-
-                <br />
-
-                <span>
-                  {stop.state}
-                </span>
-              </Popup>
-            </Marker>
-          );
-        }
-      )}
-
-      {/* ================================================== */}
-      {/* DESTINATION */}
-      {/* ================================================== */}
-
-      <Marker
-        position={destinationPoint}
-        icon={createDestinationIcon()}
-      >
-        <Popup>
-          <div>
-            <strong>
-              🎯 Destination
-            </strong>
-
-            <br />
-
-            <span>
-              {DESTINATION.name}
-            </span>
-
-            <br />
-
-            <span>
-              {DESTINATION.state}
-            </span>
-          </div>
-        </Popup>
-      </Marker>
-
-      {/* ================================================== */}
-      {/* LIVE TRUCK */}
-      {/* ================================================== */}
-
-      {currentPoint && (
-        <Marker
-          position={currentPoint}
-          icon={createTruckIcon()}
-        >
-          <Popup>
-            <div>
-              <strong>
-                🚚 {TRUCK_ID}
-              </strong>
-
-              <br />
-
-              <span>
-                Live GPS Location
-              </span>
-
-              <br />
-
-              <small>
-                Lat:{" "}
-                {currentPosition.lat.toFixed(
-                  6
-                )}
-              </small>
-
-              <br />
-
-              <small>
-                Lng:{" "}
-                {currentPosition.lng.toFixed(
-                  6
-                )}
-              </small>
-            </div>
-          </Popup>
-        </Marker>
-      )}
-
-    </MapContainer>
-  );
-}
-
-// ============================================================
-// MAIN GPS TRACKER
-// ============================================================
+// =====================================================
+// MAIN COMPONENT
+// =====================================================
 
 export default function GpsTracker() {
-
-  // ----------------------------------------------------------
-  // STATE
-  // ----------------------------------------------------------
-
-  const [currentPosition, setCurrentPosition] =
+  const [currentLocation, setCurrentLocation] =
     useState(null);
 
-  const [history, setHistory] =
-    useState([]);
+  const [history, setHistory] = useState([]);
 
-  const [backendOnline, setBackendOnline] =
-    useState(null);
+  const [serverStatus, setServerStatus] =
+    useState("Checking...");
 
   const [lastUpdate, setLastUpdate] =
     useState(null);
 
-  const [error, setError] =
-    useState("");
+  const [error, setError] = useState("");
 
   const [loading, setLoading] =
     useState(true);
 
-  // Prevent unnecessary duplicate requests
-  const historyRequest = useRef(false);
+  // ===================================================
+  // FETCH LATEST GPS LOCATION
+  // ===================================================
 
-  // ----------------------------------------------------------
-  // GET CURRENT TRUCK LOCATION
-  // ----------------------------------------------------------
+  const fetchLiveLocation = async () => {
+    try {
+      const response = await fetch(
+        `${API_URL}/get`
+      );
 
-  const fetchCurrentLocation =
-    async () => {
-      try {
-        const result =
-          await callApi("/get");
+      if (!response.ok) {
+        throw new Error(
+          `Server returned ${response.status}`
+        );
+      }
 
-        setBackendOnline(true);
+      const result = await response.json();
 
-        const truck =
-          (result.data || []).find(
-            (device) =>
-              String(device.id) ===
-              String(TRUCK_ID)
+      console.log("LIVE GPS DATA:", result);
+
+      if (
+        result.data &&
+        Array.isArray(result.data)
+      ) {
+        const truck = result.data.find(
+          (item) =>
+            item.id === TRUCK_ID
+        );
+
+        if (truck) {
+          const location = {
+            lat: Number(truck.lat),
+            lng: Number(truck.lng),
+            timestamp: Number(
+              truck.updatedAt
+            ),
+          };
+
+          console.log(
+            "TRUCK LOCATION:",
+            location
           );
 
-        if (!truck) {
-          setCurrentPosition(null);
-          return;
+          setCurrentLocation(location);
+          setLastUpdate(
+            Number(truck.updatedAt)
+          );
+
+          setServerStatus("Connected");
+          setError("");
+          setLoading(false);
+        } else {
+          setServerStatus("Connected");
+          setLoading(false);
+
+          console.log(
+            `No location found for ${TRUCK_ID}`
+          );
         }
-
-        const position = {
-          lat: Number(truck.lat),
-          lng: Number(truck.lng),
-        };
-
-        setCurrentPosition(position);
-
-        setLastUpdate(
-          truck.updatedAt ||
-            Date.now()
-        );
-
-        setError("");
-      } catch (err) {
-        console.error(err);
-
-        setBackendOnline(false);
-
-        setError(
-          "Unable to connect to GPS server."
-        );
-      } finally {
-        setLoading(false);
       }
-    };
+    } catch (err) {
+      console.error(
+        "Failed to fetch live GPS:",
+        err
+      );
 
-  // ----------------------------------------------------------
-  // GET TRUCK HISTORY
-  // ----------------------------------------------------------
+      setServerStatus("Offline");
 
-  const fetchHistory =
-    async () => {
+      setError(
+        "Unable to connect to GPS server."
+      );
 
-      if (historyRequest.current) {
-        return;
+      setLoading(false);
+    }
+  };
+
+  // ===================================================
+  // FETCH TRAVEL HISTORY
+  // ===================================================
+
+  const fetchHistory = async () => {
+    try {
+      const response = await fetch(
+        `${API_URL}/history/${TRUCK_ID}`
+      );
+
+      if (!response.ok) {
+        throw new Error(
+          `History server returned ${response.status}`
+        );
       }
 
-      historyRequest.current = true;
+      const result =
+        await response.json();
 
-      try {
-        const result =
-          await callApi(
-            `/history/${TRUCK_ID}`
-          );
+      console.log(
+        "GPS HISTORY:",
+        result
+      );
 
-        const points =
-          (result.data || []).map(
-            (point) => [
-              Number(point.lat),
-              Number(point.lng),
-            ]
+      if (
+        result.data &&
+        Array.isArray(result.data)
+      ) {
+        const points = result.data
+          .map((item) => ({
+            lat: Number(item.lat),
+            lng: Number(item.lng),
+            timestamp: Number(
+              item.timestamp
+            ),
+          }))
+          .filter(
+            (point) =>
+              Number.isFinite(point.lat) &&
+              Number.isFinite(point.lng)
           );
 
         setHistory(points);
-
-      } catch (err) {
-        console.error(
-          "History error:",
-          err
-        );
-      } finally {
-        historyRequest.current = false;
       }
-    };
+    } catch (err) {
+      console.error(
+        "Failed to fetch history:",
+        err
+      );
+    }
+  };
 
-  // ----------------------------------------------------------
-  // START POLLING
-  // ----------------------------------------------------------
+  // ===================================================
+  // POLLING
+  // ===================================================
 
   useEffect(() => {
-
-    fetchCurrentLocation();
+    fetchLiveLocation();
     fetchHistory();
 
-    const interval =
-      setInterval(() => {
-        fetchCurrentLocation();
-        fetchHistory();
-      }, 3000);
+    const locationInterval =
+      setInterval(
+        fetchLiveLocation,
+        POLLING_INTERVAL
+      );
 
-    return () =>
-      clearInterval(interval);
+    const historyInterval =
+      setInterval(
+        fetchHistory,
+        POLLING_INTERVAL
+      );
 
+    return () => {
+      clearInterval(
+        locationInterval
+      );
+
+      clearInterval(
+        historyInterval
+      );
+    };
   }, []);
 
-  // ----------------------------------------------------------
-  // TRAVELLED DISTANCE
-  // ----------------------------------------------------------
+  // ===================================================
+  // CALCULATE TRAVELLED DISTANCE
+  // ===================================================
 
   const travelledDistance =
     useMemo(() => {
-      return calculateTotalDistance(
-        history
-      );
-    }, [history]);
-
-  // ----------------------------------------------------------
-  // DISTANCE TO DESTINATION
-  // ----------------------------------------------------------
-
-  const remainingDistance =
-    useMemo(() => {
-
-      if (!currentPosition) {
+      if (history.length < 2) {
         return 0;
       }
 
-      return calculateDistance(
-        currentPosition.lat,
-        currentPosition.lng,
-        DESTINATION.lat,
-        DESTINATION.lng
-      );
+      let total = 0;
 
-    }, [currentPosition]);
+      for (
+        let i = 1;
+        i < history.length;
+        i++
+      ) {
+        total += calculateDistance(
+          history[i - 1],
+          history[i]
+        );
+      }
 
-  // ----------------------------------------------------------
-  // FORMAT TIME
-  // ----------------------------------------------------------
+      return total;
+    }, [history]);
 
-  const formattedLastUpdate =
-    lastUpdate
-      ? new Date(
-          lastUpdate
-        ).toLocaleTimeString()
-      : "--";
+  // ===================================================
+  // START POINT
+  // ===================================================
 
-  // ----------------------------------------------------------
+  const startPoint =
+    history.length > 0
+      ? history[0]
+      : null;
+
+  // ===================================================
+  // MAP CENTER
+  // ===================================================
+
+  const mapCenter =
+    currentLocation
+      ? [
+          currentLocation.lat,
+          currentLocation.lng,
+        ]
+      : startPoint
+      ? [
+          startPoint.lat,
+          startPoint.lng,
+        ]
+      : [23.2599, 77.4126];
+
+  // ===================================================
+  // REFRESH
+  // ===================================================
+
+  const handleRefresh = () => {
+    setLoading(true);
+
+    fetchLiveLocation();
+    fetchHistory();
+  };
+
+  // ===================================================
   // UI
-  // ----------------------------------------------------------
+  // ===================================================
 
   return (
-    <div className="w-full min-h-[720px] bg-[#0B1220] text-slate-200 font-sans flex flex-col rounded-lg overflow-hidden border border-[#1E293B]">
+    <div className="min-h-screen bg-gray-50 text-gray-900">
 
-      {/* ==================================================== */}
+      {/* ============================================= */}
       {/* HEADER */}
-      {/* ==================================================== */}
+      {/* ============================================= */}
 
-      <div className="flex items-center justify-between px-5 py-4 border-b border-[#1E293B] bg-[#0E1729]">
+      <header className="bg-white border-b border-gray-200">
+        <div className="max-w-7xl mx-auto px-6 py-5">
 
-        <div className="flex items-center gap-3">
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
 
-          <div className="w-9 h-9 rounded-lg bg-cyan-400/10 flex items-center justify-center">
-            <Satellite
-              size={19}
-              className="text-cyan-400"
-            />
-          </div>
+            <div className="flex items-center gap-4">
 
-          <div>
-
-            <h1 className="text-sm font-semibold text-slate-100">
-              GPS Tracking Console
-            </h1>
-
-            <p className="text-xs text-slate-500">
-              Live Vehicle Monitoring
-            </p>
-
-          </div>
-
-        </div>
-
-        {/* CONNECTION STATUS */}
-
-        <div className="flex items-center gap-2">
-
-          {backendOnline ? (
-            <>
-              <Wifi
-                size={15}
-                className="text-emerald-400"
-              />
-
-              <span className="text-xs text-emerald-400">
-                LIVE
-              </span>
-            </>
-          ) : backendOnline === false ? (
-            <>
-              <WifiOff
-                size={15}
-                className="text-red-400"
-              />
-
-              <span className="text-xs text-red-400">
-                OFFLINE
-              </span>
-            </>
-          ) : (
-            <>
-              <Radio
-                size={15}
-                className="text-amber-400"
-              />
-
-              <span className="text-xs text-amber-400">
-                CONNECTING
-              </span>
-            </>
-          )}
-
-        </div>
-
-      </div>
-
-      {/* ==================================================== */}
-      {/* TRUCK INFO */}
-      {/* ==================================================== */}
-
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-px bg-[#1E293B]">
-
-        {/* TRUCK */}
-
-        <div className="bg-[#0E1729] p-4">
-
-          <div className="flex items-center gap-2 text-xs text-slate-500 mb-2">
-
-            <Truck size={14} />
-
-            Truck
-
-          </div>
-
-          <div className="text-sm font-semibold text-slate-100">
-            {TRUCK_ID}
-          </div>
-
-        </div>
-
-        {/* TRAVELLED */}
-
-        <div className="bg-[#0E1729] p-4">
-
-          <div className="flex items-center gap-2 text-xs text-slate-500 mb-2">
-
-            <Route size={14} />
-
-            Travelled
-
-          </div>
-
-          <div className="text-sm font-semibold text-cyan-400">
-            {travelledDistance.toFixed(2)} km
-          </div>
-
-        </div>
-
-        {/* REMAINING */}
-
-        <div className="bg-[#0E1729] p-4">
-
-          <div className="flex items-center gap-2 text-xs text-slate-500 mb-2">
-
-            <Target size={14} />
-
-            To Destination
-
-          </div>
-
-          <div className="text-sm font-semibold text-red-400">
-            {remainingDistance.toFixed(2)} km
-          </div>
-
-        </div>
-
-        {/* LAST UPDATE */}
-
-        <div className="bg-[#0E1729] p-4">
-
-          <div className="flex items-center gap-2 text-xs text-slate-500 mb-2">
-
-            <Activity size={14} />
-
-            Last Update
-
-          </div>
-
-          <div className="text-sm font-semibold text-slate-100">
-            {formattedLastUpdate}
-          </div>
-
-        </div>
-
-      </div>
-
-      {/* ==================================================== */}
-      {/* MAP AREA */}
-      {/* ==================================================== */}
-
-      <div className="flex-1 p-4">
-
-        <div className="relative h-[570px] rounded-xl overflow-hidden border border-[#1E293B]">
-
-          {/* MAP */}
-
-          <TrackingMap
-            currentPosition={
-              currentPosition
-            }
-            history={history}
-          />
-
-          {/* ================================================= */}
-          {/* MAP LEGEND */}
-          {/* ================================================= */}
-
-          <div className="absolute left-4 bottom-4 z-[1000] bg-[#0B1220]/95 backdrop-blur border border-[#334155] rounded-lg p-3">
-
-            <div className="text-xs font-semibold text-slate-300 mb-3">
-              Map Legend
-            </div>
-
-            <div className="space-y-2 text-xs">
-
-              <div className="flex items-center gap-2">
-
-                <span className="w-3 h-3 rounded-full bg-green-500" />
-
-                <span className="text-slate-400">
-                  Tracking Start
-                </span>
-
-              </div>
-
-              <div className="flex items-center gap-2">
-
-                <span className="w-8 h-1 rounded bg-cyan-400" />
-
-                <span className="text-slate-400">
-                  Actual Travelled
-                </span>
-
-              </div>
-
-              <div className="flex items-center gap-2">
-
-                <span className="w-8 border-t-2 border-dashed border-slate-400" />
-
-                <span className="text-slate-400">
-                  Planned Route
-                </span>
-
-              </div>
-
-              <div className="flex items-center gap-2">
-
-                <span className="text-base">
-                  🚚
-                </span>
-
-                <span className="text-slate-400">
-                  Live Truck
-                </span>
-
-              </div>
-
-              <div className="flex items-center gap-2">
-
-                <span className="text-base">
-                  🎯
-                </span>
-
-                <span className="text-slate-400">
-                  Destination
-                </span>
-
-              </div>
-
-            </div>
-
-          </div>
-
-          {/* ================================================= */}
-          {/* LIVE INDICATOR */}
-          {/* ================================================= */}
-
-          {currentPosition && (
-            <div className="absolute top-4 right-4 z-[1000] bg-[#0B1220]/95 backdrop-blur border border-cyan-400/30 rounded-lg px-3 py-2">
-
-              <div className="flex items-center gap-2">
-
-                <span className="relative flex h-2.5 w-2.5">
-
-                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-cyan-400 opacity-75" />
-
-                  <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-cyan-400" />
-
-                </span>
-
-                <span className="text-xs text-cyan-300">
-                  LIVE GPS
-                </span>
-
-              </div>
-
-            </div>
-          )}
-
-          {/* ================================================= */}
-          {/* WAITING STATE */}
-          {/* ================================================= */}
-
-          {!currentPosition && !loading && (
-            <div className="absolute inset-0 z-[900] pointer-events-none flex items-center justify-center">
-
-              <div className="bg-[#0B1220]/95 border border-[#334155] rounded-xl px-6 py-5 text-center">
-
-                <Navigation
-                  size={28}
-                  className="mx-auto mb-3 text-slate-500"
+              <div className="w-12 h-12 rounded-xl bg-blue-600 flex items-center justify-center">
+                <Truck
+                  size={25}
+                  className="text-white"
                 />
+              </div>
 
-                <p className="text-sm text-slate-300">
-                  Waiting for {TRUCK_ID}
+              <div>
+                <h1 className="text-xl font-bold">
+                  GPS Tracking Console
+                </h1>
+
+                <p className="text-sm text-gray-500">
+                  Live Vehicle Monitoring
+                </p>
+              </div>
+
+            </div>
+
+            <div className="flex items-center gap-3">
+
+              <div
+                className={`flex items-center gap-2 px-4 py-2 rounded-full text-sm font-semibold ${
+                  serverStatus ===
+                  "Connected"
+                    ? "bg-green-100 text-green-700"
+                    : "bg-red-100 text-red-700"
+                }`}
+              >
+                {serverStatus ===
+                "Connected" ? (
+                  <Wifi size={16} />
+                ) : (
+                  <WifiOff size={16} />
+                )}
+
+                {serverStatus}
+              </div>
+
+              <button
+                onClick={handleRefresh}
+                className="p-2.5 bg-gray-100 hover:bg-gray-200 rounded-lg transition"
+                title="Refresh"
+              >
+                <RefreshCw
+                  size={18}
+                  className={
+                    loading
+                      ? "animate-spin"
+                      : ""
+                  }
+                />
+              </button>
+
+            </div>
+
+          </div>
+
+        </div>
+      </header>
+
+      {/* ============================================= */}
+      {/* MAIN */}
+      {/* ============================================= */}
+
+      <main className="max-w-7xl mx-auto px-6 py-6">
+
+        {/* =========================================== */}
+        {/* TRUCK INFO */}
+        {/* =========================================== */}
+
+        <div className="bg-white border border-gray-200 rounded-2xl p-5 mb-6 shadow-sm">
+
+          <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+
+            <div>
+
+              <p className="text-sm text-gray-500">
+                Tracking Vehicle
+              </p>
+
+              <div className="flex items-center gap-3 mt-1">
+
+                <h2 className="text-2xl font-bold">
+                  {TRUCK_ID}
+                </h2>
+
+                <span
+                  className={`px-3 py-1 rounded-full text-xs font-bold ${
+                    currentLocation
+                      ? "bg-green-100 text-green-700"
+                      : "bg-gray-100 text-gray-500"
+                  }`}
+                >
+                  {currentLocation
+                    ? "LIVE"
+                    : "WAITING"}
+                </span>
+
+              </div>
+
+            </div>
+
+            <div className="text-sm text-gray-500">
+
+              Last update:
+
+              <span className="font-semibold text-gray-800 ml-2">
+                {formatTime(
+                  lastUpdate
+                )}
+              </span>
+
+            </div>
+
+          </div>
+
+        </div>
+
+        {/* =========================================== */}
+        {/* STATS */}
+        {/* =========================================== */}
+
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+
+          {/* Current Location */}
+
+          <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm">
+
+            <div className="flex items-center gap-3">
+
+              <div className="p-3 bg-blue-50 rounded-xl">
+                <MapPin
+                  size={21}
+                  className="text-blue-600"
+                />
+              </div>
+
+              <div>
+                <p className="text-sm text-gray-500">
+                  Current Location
                 </p>
 
-                <p className="text-xs text-slate-600 mt-1">
+                <p className="font-bold">
+                  {currentLocation
+                    ? `${currentLocation.lat.toFixed(
+                        4
+                      )}, ${currentLocation.lng.toFixed(
+                        4
+                      )}`
+                    : "--"}
+                </p>
+              </div>
+
+            </div>
+
+          </div>
+
+          {/* Distance */}
+
+          <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm">
+
+            <div className="flex items-center gap-3">
+
+              <div className="p-3 bg-green-50 rounded-xl">
+                <Route
+                  size={21}
+                  className="text-green-600"
+                />
+              </div>
+
+              <div>
+
+                <p className="text-sm text-gray-500">
+                  Distance Travelled
+                </p>
+
+                <p className="text-2xl font-bold">
+                  {travelledDistance.toFixed(
+                    2
+                  )}{" "}
+                  <span className="text-sm font-medium">
+                    km
+                  </span>
+                </p>
+
+              </div>
+
+            </div>
+
+          </div>
+
+          {/* GPS Points */}
+
+          <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm">
+
+            <div className="flex items-center gap-3">
+
+              <div className="p-3 bg-purple-50 rounded-xl">
+                <Activity
+                  size={21}
+                  className="text-purple-600"
+                />
+              </div>
+
+              <div>
+
+                <p className="text-sm text-gray-500">
+                  GPS Points
+                </p>
+
+                <p className="text-2xl font-bold">
+                  {history.length}
+                </p>
+
+              </div>
+
+            </div>
+
+          </div>
+
+          {/* Last Update */}
+
+          <div className="bg-white border border-gray-200 rounded-2xl p-5 shadow-sm">
+
+            <div className="flex items-center gap-3">
+
+              <div className="p-3 bg-orange-50 rounded-xl">
+                <Clock
+                  size={21}
+                  className="text-orange-600"
+                />
+              </div>
+
+              <div>
+
+                <p className="text-sm text-gray-500">
+                  Last GPS Update
+                </p>
+
+                <p className="font-bold">
+                  {lastUpdate
+                    ? formatTime(
+                        lastUpdate
+                      )
+                    : "--"}
+                </p>
+
+              </div>
+
+            </div>
+
+          </div>
+
+        </div>
+
+        {/* =========================================== */}
+        {/* ERROR */}
+        {/* =========================================== */}
+
+        {error && (
+          <div className="bg-red-50 border border-red-200 text-red-700 rounded-xl p-4 mb-6">
+            <div className="flex items-center gap-2">
+              <WifiOff size={18} />
+              <span className="font-medium">
+                {error}
+              </span>
+            </div>
+          </div>
+        )}
+
+        {/* =========================================== */}
+        {/* MAP */}
+        {/* =========================================== */}
+
+        <div className="bg-white border border-gray-200 rounded-2xl shadow-sm overflow-hidden mb-6">
+
+          <div className="p-5 border-b border-gray-200">
+
+            <div className="flex items-center justify-between">
+
+              <div className="flex items-center gap-3">
+
+                <div className="p-2.5 bg-blue-50 rounded-xl">
+                  <Navigation
+                    size={21}
+                    className="text-blue-600"
+                  />
+                </div>
+
+                <div>
+
+                  <h2 className="font-bold text-lg">
+                    Live Vehicle Map
+                  </h2>
+
+                  <p className="text-sm text-gray-500">
+                    Real-time mobile GPS tracking
+                  </p>
+
+                </div>
+
+              </div>
+
+              {currentLocation && (
+                <div className="flex items-center gap-2 text-green-600 text-sm font-semibold">
+                  <span className="w-2.5 h-2.5 bg-green-500 rounded-full animate-pulse" />
+                  Live
+                </div>
+              )}
+
+            </div>
+
+          </div>
+
+          <div className="h-[500px]">
+
+            <MapContainer
+              center={mapCenter}
+              zoom={13}
+              scrollWheelZoom={true}
+              className="w-full h-full"
+            >
+
+              <TileLayer
+                attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
+                url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+              />
+
+              {/* Auto move map to truck */}
+
+              <MapUpdater
+                location={
+                  currentLocation
+                }
+              />
+
+              {/* ================================= */}
+              {/* TRAVELLED ROUTE */}
+              {/* ================================= */}
+
+              {history.length > 1 && (
+                <Polyline
+                  positions={history.map(
+                    (point) => [
+                      point.lat,
+                      point.lng,
+                    ]
+                  )}
+                  pathOptions={{
+                    color: "#2563eb",
+                    weight: 5,
+                    opacity: 0.85,
+                  }}
+                />
+              )}
+
+              {/* ================================= */}
+              {/* START POINT */}
+              {/* ================================= */}
+
+              {startPoint && (
+                <Marker
+                  position={[
+                    startPoint.lat,
+                    startPoint.lng,
+                  ]}
+                  icon={startIcon}
+                >
+                  <Popup>
+                    <div className="text-sm">
+                      <strong>
+                        Tracking Start
+                      </strong>
+
+                      <br />
+
+                      {startPoint.lat.toFixed(
+                        6
+                      )}
+                      ,{" "}
+                      {startPoint.lng.toFixed(
+                        6
+                      )}
+                    </div>
+                  </Popup>
+                </Marker>
+              )}
+
+              {/* ================================= */}
+              {/* GPS HISTORY POINTS */}
+              {/* ================================= */}
+
+              {history.map(
+                (point, index) => (
+                  <CircleMarker
+                    key={`${point.timestamp}-${index}`}
+                    center={[
+                      point.lat,
+                      point.lng,
+                    ]}
+                    radius={3}
+                    pathOptions={{
+                      color: "#2563eb",
+                      fillColor:
+                        "#2563eb",
+                      fillOpacity: 0.8,
+                    }}
+                  />
+                )
+              )}
+
+              {/* ================================= */}
+              {/* CURRENT TRUCK */}
+              {/* ================================= */}
+
+              {currentLocation && (
+                <Marker
+                  position={[
+                    currentLocation.lat,
+                    currentLocation.lng,
+                  ]}
+                  icon={truckIcon}
+                >
+                  <Popup>
+
+                    <div className="min-w-[180px]">
+
+                      <h3 className="font-bold text-base mb-2">
+                        🚛 {TRUCK_ID}
+                      </h3>
+
+                      <div className="text-sm space-y-1">
+
+                        <p>
+                          <strong>
+                            Latitude:
+                          </strong>{" "}
+                          {currentLocation.lat.toFixed(
+                            6
+                          )}
+                        </p>
+
+                        <p>
+                          <strong>
+                            Longitude:
+                          </strong>{" "}
+                          {currentLocation.lng.toFixed(
+                            6
+                          )}
+                        </p>
+
+                        <p>
+                          <strong>
+                            Updated:
+                          </strong>{" "}
+                          {formatTime(
+                            currentLocation.timestamp
+                          )}
+                        </p>
+
+                      </div>
+
+                    </div>
+
+                  </Popup>
+                </Marker>
+              )}
+
+            </MapContainer>
+
+          </div>
+
+        </div>
+
+        {/* =========================================== */}
+        {/* CURRENT GPS INFORMATION */}
+        {/* =========================================== */}
+
+        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+
+          {/* Current Position */}
+
+          <div className="bg-white border border-gray-200 rounded-2xl p-6 shadow-sm">
+
+            <div className="flex items-center gap-3 mb-5">
+
+              <div className="p-3 bg-blue-50 rounded-xl">
+                <MapPin
+                  size={22}
+                  className="text-blue-600"
+                />
+              </div>
+
+              <div>
+
+                <h3 className="font-bold text-lg">
+                  Current GPS Position
+                </h3>
+
+                <p className="text-sm text-gray-500">
+                  Location received from driver phone
+                </p>
+
+              </div>
+
+            </div>
+
+            {currentLocation ? (
+              <div className="space-y-3">
+
+                <div className="flex justify-between bg-gray-50 rounded-xl p-4">
+
+                  <span className="text-gray-500">
+                    Latitude
+                  </span>
+
+                  <span className="font-mono font-semibold">
+                    {currentLocation.lat.toFixed(
+                      6
+                    )}
+                  </span>
+
+                </div>
+
+                <div className="flex justify-between bg-gray-50 rounded-xl p-4">
+
+                  <span className="text-gray-500">
+                    Longitude
+                  </span>
+
+                  <span className="font-mono font-semibold">
+                    {currentLocation.lng.toFixed(
+                      6
+                    )}
+                  </span>
+
+                </div>
+
+                <div className="flex justify-between bg-gray-50 rounded-xl p-4">
+
+                  <span className="text-gray-500">
+                    Last Updated
+                  </span>
+
+                  <span className="font-semibold">
+                    {formatTime(
+                      currentLocation.timestamp
+                    )}
+                  </span>
+
+                </div>
+
+              </div>
+            ) : (
+              <div className="py-12 text-center text-gray-400">
+
+                <Navigation
+                  size={40}
+                  className="mx-auto mb-3"
+                />
+
+                <p>
+                  Waiting for TRUCK-001
+                </p>
+
+                <p className="text-sm mt-1">
                   Start tracking from the driver phone
                 </p>
 
               </div>
-
-            </div>
-          )}
-
-        </div>
-
-      </div>
-
-      {/* ==================================================== */}
-      {/* BOTTOM DETAILS */}
-      {/* ==================================================== */}
-
-      <div className="border-t border-[#1E293B] bg-[#0E1729] px-5 py-4">
-
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-
-          {/* CURRENT LOCATION */}
-
-          <div>
-
-            <div className="flex items-center gap-2 text-xs text-slate-500 mb-1">
-
-              <MapPin size={13} />
-
-              Current Location
-
-            </div>
-
-            {currentPosition ? (
-              <p className="font-mono text-xs text-slate-300">
-
-                {currentPosition.lat.toFixed(
-                  6
-                )}
-                ,{" "}
-                {currentPosition.lng.toFixed(
-                  6
-                )}
-
-              </p>
-            ) : (
-              <p className="text-xs text-slate-600">
-                No GPS data
-              </p>
             )}
 
           </div>
 
-          {/* JOURNEY POINTS */}
+          {/* Tracking Status */}
 
-          <div>
+          <div className="bg-white border border-gray-200 rounded-2xl p-6 shadow-sm">
 
-            <div className="flex items-center gap-2 text-xs text-slate-500 mb-1">
+            <div className="flex items-center gap-3 mb-5">
 
-              <Navigation size={13} />
+              <div className="p-3 bg-green-50 rounded-xl">
+                <Activity
+                  size={22}
+                  className="text-green-600"
+                />
+              </div>
 
-              GPS Points
+              <div>
 
-            </div>
+                <h3 className="font-bold text-lg">
+                  Tracking Status
+                </h3>
 
-            <p className="text-xs text-slate-300">
-              {history.length} points recorded
-            </p>
+                <p className="text-sm text-gray-500">
+                  Live connection information
+                </p>
 
-          </div>
-
-          {/* DESTINATION */}
-
-          <div>
-
-            <div className="flex items-center gap-2 text-xs text-slate-500 mb-1">
-
-              <Target size={13} />
-
-              Destination
+              </div>
 
             </div>
 
-            <p className="text-xs text-slate-300">
-              {DESTINATION.name},{" "}
-              {DESTINATION.state}
-            </p>
+            <div className="space-y-4">
+
+              <div className="flex justify-between items-center">
+
+                <span className="text-gray-500">
+                  Vehicle
+                </span>
+
+                <span className="font-semibold">
+                  {TRUCK_ID}
+                </span>
+
+              </div>
+
+              <div className="flex justify-between items-center">
+
+                <span className="text-gray-500">
+                  Server
+                </span>
+
+                <span
+                  className={`font-semibold ${
+                    serverStatus ===
+                    "Connected"
+                      ? "text-green-600"
+                      : "text-red-600"
+                  }`}
+                >
+                  {serverStatus}
+                </span>
+
+              </div>
+
+              <div className="flex justify-between items-center">
+
+                <span className="text-gray-500">
+                  GPS Status
+                </span>
+
+                <span
+                  className={`font-semibold ${
+                    currentLocation
+                      ? "text-green-600"
+                      : "text-gray-500"
+                  }`}
+                >
+                  {currentLocation
+                    ? "Receiving GPS"
+                    : "No GPS data"}
+                </span>
+
+              </div>
+
+              <div className="flex justify-between items-center">
+
+                <span className="text-gray-500">
+                  Points Recorded
+                </span>
+
+                <span className="font-semibold">
+                  {history.length}
+                </span>
+
+              </div>
+
+              <div className="flex justify-between items-center">
+
+                <span className="text-gray-500">
+                  Update Frequency
+                </span>
+
+                <span className="font-semibold">
+                  3 seconds
+                </span>
+
+              </div>
+
+            </div>
 
           </div>
 
         </div>
 
-      </div>
+        {/* =========================================== */}
+        {/* GPS HISTORY */}
+        {/* =========================================== */}
 
-      {/* ==================================================== */}
-      {/* ERROR */}
-      {/* ==================================================== */}
+        <div className="bg-white border border-gray-200 rounded-2xl shadow-sm mt-6 overflow-hidden">
 
-      {error && (
-        <div className="border-t border-red-500/20 bg-red-500/5 px-5 py-3">
+          <div className="p-5 border-b border-gray-200">
 
-          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-3">
 
-            <TriangleAlert
-              size={15}
-              className="text-red-400"
-            />
+              <div className="p-2.5 bg-purple-50 rounded-xl">
+                <Route
+                  size={21}
+                  className="text-purple-600"
+                />
+              </div>
 
-            <span className="text-xs text-red-300">
-              {error}
-            </span>
+              <div>
+
+                <h2 className="font-bold text-lg">
+                  GPS Movement History
+                </h2>
+
+                <p className="text-sm text-gray-500">
+                  Recorded positions from driver phone
+                </p>
+
+              </div>
+
+            </div>
 
           </div>
 
+          {history.length > 0 ? (
+
+            <div className="overflow-x-auto">
+
+              <table className="w-full text-sm">
+
+                <thead className="bg-gray-50">
+
+                  <tr>
+
+                    <th className="text-left px-5 py-3 font-semibold text-gray-500">
+                      #
+                    </th>
+
+                    <th className="text-left px-5 py-3 font-semibold text-gray-500">
+                      Latitude
+                    </th>
+
+                    <th className="text-left px-5 py-3 font-semibold text-gray-500">
+                      Longitude
+                    </th>
+
+                    <th className="text-left px-5 py-3 font-semibold text-gray-500">
+                      Time
+                    </th>
+
+                  </tr>
+
+                </thead>
+
+                <tbody>
+
+                  {[...history]
+                    .reverse()
+                    .slice(0, 20)
+                    .map(
+                      (
+                        point,
+                        index
+                      ) => (
+                        <tr
+                          key={`${point.timestamp}-${index}`}
+                          className="border-t border-gray-100"
+                        >
+
+                          <td className="px-5 py-3 font-medium">
+                            {index + 1}
+                          </td>
+
+                          <td className="px-5 py-3 font-mono">
+                            {point.lat.toFixed(
+                              6
+                            )}
+                          </td>
+
+                          <td className="px-5 py-3 font-mono">
+                            {point.lng.toFixed(
+                              6
+                            )}
+                          </td>
+
+                          <td className="px-5 py-3 text-gray-500">
+                            {formatTime(
+                              point.timestamp
+                            )}
+                          </td>
+
+                        </tr>
+                      )
+                    )}
+
+                </tbody>
+
+              </table>
+
+            </div>
+
+          ) : (
+
+            <div className="py-12 text-center text-gray-400">
+
+              <MapPin
+                size={38}
+                className="mx-auto mb-3"
+              />
+
+              <p className="font-medium">
+                No GPS data
+              </p>
+
+              <p className="text-sm mt-1">
+                Start tracking from the driver phone
+              </p>
+
+            </div>
+
+          )}
+
         </div>
-      )}
+
+        {/* =========================================== */}
+        {/* FOOTER */}
+        {/* =========================================== */}
+
+        <div className="text-center text-xs text-gray-400 py-8">
+
+          <p>
+            NER-Logix • Live GPS Vehicle Tracking
+          </p>
+
+          <p className="mt-1">
+            Monitoring {TRUCK_ID}
+          </p>
+
+        </div>
+
+      </main>
 
     </div>
   );
